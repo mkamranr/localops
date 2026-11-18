@@ -1,4 +1,4 @@
-# Security Model (Phase 1)
+# Security Model (Phase 2)
 
 ## Authentication
 
@@ -55,6 +55,33 @@ Isolation is enforced by **PostgreSQL row-level security**, not only by applicat
 > `app.tenant_id` itself. Phase 7 hardening will revisit this.
 
 These properties are tested directly in SQL as the app role (`backend/tests/integration/test_rls.py`).
+
+LangGraph checkpoints follow the same rule. The thread id is `<tenant_id>:<investigation_id>`,
+and RLS on the checkpoint tables compares that prefix with the session's tenant. The worker opens
+its checkpoint connection as `localops_app` with the tenant set at session level. Cross-tenant
+reads return nothing and cross-tenant writes are rejected (`test_investigations.py`).
+
+## AI safety
+
+- The model gateway only calls endpoints that an administrator configured. Model traffic ignores
+  ambient proxy variables. LangSmith tracing is forced off.
+- Model output is **advisory and validated**. Every Supervisor result is parsed against a strict
+  schema. Planned tasks are filtered to known agents and capped. Nothing the model outputs runs a
+  command; tool execution arrives in Phase 5 behind the policy and approval engine.
+- Request text is passed to the model as delimited data, with an instruction to ignore embedded
+  instructions. This reduces, but cannot eliminate, prompt injection, which is why model output
+  never directly causes actions.
+- Reports never invent evidence. Classifications are labelled unverified. Without diagnostic
+  evidence, no root cause is stated.
+- Prompts and completions are not logged; only token counts, latency and outcome are.
+- `autonomous` execution mode is refused until Phase 5.
+
+## Secrets at rest
+
+Model API keys are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) using
+`LOCALOPS_ENCRYPTION_KEY`. That key is separate from `APP_SECRET_KEY` so either can rotate
+independently. Keys are write-only through the API, and the audit log records only that a key
+was set, replaced or cleared.
 
 ## Audit logging
 

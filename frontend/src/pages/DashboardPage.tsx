@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { errorMessage } from "@/api/client";
-import { dashboardApi } from "@/api/endpoints";
+import { agentsApi, dashboardApi } from "@/api/endpoints";
 import { Badge, EmptyState, ErrorState, Panel, Spinner, StatusDot } from "@/components/ui/display";
 import { useAuthStore } from "@/stores/authStore";
 import type { AuditLog, DashboardSummary } from "@/types/api";
@@ -165,6 +165,75 @@ function ActivityPanel() {
   );
 }
 
+function AgentActivityPanel({ data }: { data: DashboardSummary }) {
+  const canRead = useAuthStore((s) => s.hasPermission("agent.read"));
+  const agents = useQuery({
+    queryKey: ["agents"],
+    queryFn: agentsApi.list,
+    enabled: canRead,
+    refetchInterval: 30_000,
+  });
+  const active = (agents.data ?? []).filter((a) => a.stats.executions_24h > 0);
+  const success = data.agent_executions_24h
+    ? Math.round(((data.agent_executions_24h - data.agent_failures_24h) / data.agent_executions_24h) * 100)
+    : null;
+  return (
+    <Panel
+      title="Agent Activity"
+      actions={
+        canRead ? (
+          <Link to="/agents" className="text-xs text-blue-400 hover:underline">
+            Agents →
+          </Link>
+        ) : undefined
+      }
+    >
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-lg border border-border bg-surface-2 p-2">
+          <div className="font-mono text-xl font-semibold tabular-nums">{data.agent_executions_24h}</div>
+          <div className="text-[11px] text-muted">runs (24h)</div>
+        </div>
+        <div className="rounded-lg border border-border bg-surface-2 p-2">
+          <div className={cn("font-mono text-xl font-semibold tabular-nums", success != null && success < 90 && "text-amber-300")}>
+            {success != null ? `${success}%` : "—"}
+          </div>
+          <div className="text-[11px] text-muted">success</div>
+        </div>
+        <div className="rounded-lg border border-border bg-surface-2 p-2">
+          <div className="font-mono text-xl font-semibold tabular-nums">{data.agent_failures_24h}</div>
+          <div className="text-[11px] text-muted">failures</div>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center gap-2 text-xs text-muted">
+        <Bot className="size-3.5" /> Default model:{" "}
+        {data.default_model ? (
+          <span className="font-mono text-fg">{data.default_model}</span>
+        ) : (
+          <Link to="/settings/models" className="text-amber-300 hover:underline">
+            not configured
+          </Link>
+        )}
+      </div>
+      {canRead && (
+        <ul className="mt-3 divide-y divide-border/60">
+          {active.length === 0 ? (
+            <li className="py-3 text-xs text-subtle">No agent runs in the last 24 hours.</li>
+          ) : (
+            active.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 py-2 text-sm">
+                <StatusDot tone={a.stats.failures_24h ? "warning" : "success"} />
+                <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                <span className="font-mono text-xs text-muted">{a.stats.executions_24h} runs</span>
+                <span className="text-xs text-subtle">{formatRelative(a.stats.last_run_at)}</span>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
 export function DashboardPage() {
   const canAudit = useAuthStore((s) => s.hasPermission("audit.read"));
   const query = useQuery({
@@ -184,7 +253,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Server} tone="violet" value={`${d.resources.online}/${d.resources.total}`} label="Infrastructure resources" sub="online / total" phase={3} />
         <StatCard icon={ShieldAlert} tone="red" value={d.incidents.open_total} label="Active incidents" sub={`critical ${d.incidents.critical} · high ${d.incidents.high}`} phase={4} />
-        <StatCard icon={Search} tone="blue" value={d.active_investigations} label="Active investigations" sub="AI investigations running" phase={2} />
+        <StatCard icon={Search} tone="blue" value={d.active_investigations} label="Active investigations" sub={`${d.investigations_24h} started in the last 24h`} to="/investigations" />
         <StatCard icon={ClipboardCheck} tone="amber" value={d.pending_approvals} label="Pending approvals" sub="awaiting decision" phase={5} />
       </div>
 
@@ -224,13 +293,7 @@ export function DashboardPage() {
             </Panel>
           )}
         </div>
-        <Panel title="Agent Activity" actions={<Badge>Phase 2</Badge>}>
-          <EmptyState
-            icon={<Bot className="size-8" />}
-            title="No agents configured yet"
-            description="The model gateway and LangGraph agents arrive in Phase 2. Agent executions and success rates will appear here."
-          />
-        </Panel>
+        <AgentActivityPanel data={d} />
       </div>
     </div>
   );

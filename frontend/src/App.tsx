@@ -6,12 +6,17 @@ import { authApi } from "@/api/endpoints";
 import { Spinner } from "@/components/ui/display";
 import { AppLayout } from "@/layouts/AppLayout";
 import { COMING_SOON } from "@/layouts/navigation";
+import { AgentsPage } from "@/pages/AgentsPage";
+import { AssistantPage } from "@/pages/AssistantPage";
 import { AuditLogsPage } from "@/pages/AuditLogsPage";
 import { ComingSoonPage } from "@/pages/ComingSoonPage";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { InvestigationDetailPage } from "@/pages/investigations/InvestigationDetailPage";
+import { InvestigationsPage } from "@/pages/investigations/InvestigationsPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { AccountPage } from "@/pages/settings/AccountPage";
+import { ModelsPage } from "@/pages/settings/ModelsPage";
 import { RolesPage } from "@/pages/settings/RolesPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { TenantsPage } from "@/pages/settings/TenantsPage";
@@ -93,11 +98,44 @@ export function AppRoutes() {
             </RequirePermission>
           }
         />
+        <Route
+          path="assistant"
+          element={
+            <RequirePermission permission="incident.investigate">
+              <AssistantPage />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="investigations"
+          element={
+            <RequirePermission permission="incident.read">
+              <InvestigationsPage />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="investigations/:id"
+          element={
+            <RequirePermission permission="incident.read">
+              <InvestigationDetailPage />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="agents"
+          element={
+            <RequirePermission permission="agent.read">
+              <AgentsPage />
+            </RequirePermission>
+          }
+        />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="account" replace />} />
           <Route path="account" element={<AccountPage />} />
           <Route path="users" element={<RequirePermission permission="user.read"><UsersPage /></RequirePermission>} />
           <Route path="roles" element={<RequirePermission permission="role.read"><RolesPage /></RequirePermission>} />
+          <Route path="models" element={<RequirePermission permission="settings.read"><ModelsPage /></RequirePermission>} />
           <Route path="tenants" element={<RequirePermission permission="tenant.manage"><TenantsPage /></RequirePermission>} />
         </Route>
         {COMING_SOON.map((item) => (

@@ -20,6 +20,11 @@ dependencies = [
     "structlog>=24.4",
     "prometheus-client>=0.21",
     "arq>=0.26",
+    "langgraph>=0.4",
+    "langgraph-checkpoint-postgres>=2.0",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+    "cryptography>=44",
 ]
 
 [dependency-groups]

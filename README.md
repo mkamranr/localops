@@ -3,9 +3,11 @@
 **Open-source, AI-powered infrastructure operations and autonomous troubleshooting platform.**
 Self-hosted, multi-tenant, and designed to run in connected or fully air-gapped environments.
 
-> Status: **Phase 1 – Platform Foundation** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
-> Authentication, tenants, RBAC, audit logging, the dashboard shell and the Docker Compose
-> deployment are done. The model gateway and LangGraph agents arrive in Phase 2.
+> Status: **Phase 2 – AI Orchestration** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
+> Phase 1 (authentication, tenants, RBAC, audit, dashboard, Compose deployment) plus the model
+> gateway (Ollama, vLLM, llama.cpp, any OpenAI-compatible server), agent registry, Supervisor
+> agent, LangGraph investigations with PostgreSQL checkpointing, and live SSE progress.
+> Infrastructure discovery and diagnostic agents arrive in Phases 3–4.
 
 ## Quick start (Docker Compose)
 
@@ -19,7 +21,10 @@ docker compose ps            # all services healthy, "migrate" exited 0
 Open `http://<host>:8300` and sign in with tenant **`system`**, username `admin` and your
 `BOOTSTRAP_ADMIN_PASSWORD`. You'll be asked to change the password at first sign-in.
 
-See [docs/installation.md](docs/installation.md) for details.
+Then add a model under **Settings → AI Models** (or set `LLM_BASE_URL`/`LLM_MODEL` in `.env`
+before the first start) and open **AI Assistant**.
+
+See [docs/installation.md](docs/installation.md) and [docs/ai.md](docs/ai.md) for details.
 
 ## Repository layout
 
@@ -28,7 +33,7 @@ See [docs/installation.md](docs/installation.md) for details.
 | `backend/` | FastAPI app (`app/`), Alembic migrations, tests, Dockerfile |
 | `frontend/` | React + TypeScript + Tailwind UI, Dockerfile |
 | `deployment/` | nginx reverse proxy and PostgreSQL init scripts |
-| `docs/` | Architecture, installation, security, API notes |
+| `docs/` | Architecture, AI orchestration, installation, security, API notes |
 | `docker-compose.yml` | Full stack: postgres, redis, qdrant, migrate, api, worker, frontend, nginx |
 | `docker-compose.test.yml` | Self-contained backend test stack |
 

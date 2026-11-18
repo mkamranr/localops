@@ -1,4 +1,4 @@
-import { Building2, KeyRound, Shield, Users } from "lucide-react";
+import { Building2, Cpu, KeyRound, Shield, Users } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
 import { cn } from "@/utils/cn";
@@ -7,6 +7,7 @@ const SECTIONS = [
   { to: "account", label: "My Account", icon: KeyRound },
   { to: "users", label: "Users", icon: Users, permission: "user.read" },
   { to: "roles", label: "Roles & Permissions", icon: Shield, permission: "role.read" },
+  { to: "models", label: "AI Models", icon: Cpu, permission: "settings.read" },
   { to: "tenants", label: "Tenants", icon: Building2, permission: "tenant.manage" },
 ];
 
@@ -30,7 +31,7 @@ export function SettingsLayout() {
           </NavLink>
         ))}
         <p className="px-3 pt-3 pb-1 text-[11px] text-subtle">
-          AI models, agents, policies and integrations arrive in later phases.
+          Policies and integrations arrive in later phases.
         </p>
       </nav>
       <div className="min-w-0 flex-1">

@@ -48,6 +48,20 @@ class Settings(BaseSettings):
 
     enable_telemetry: bool = False
 
+    # --- Secrets at rest (model API keys, later integration credentials) ---
+    # Generate a Fernet key with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    encryption_key: SecretStr | None = Field(None, validation_alias="LOCALOPS_ENCRYPTION_KEY")
+
+    # --- Default model endpoint seeded into tenants (optional) ---
+    llm_provider: Literal["vllm", "ollama", "llamacpp", "openai_compatible"] = "vllm"
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+
+    # --- Investigations ---
+    investigation_timeout_seconds: int = Field(1800, ge=60)
+    investigation_max_clarifications: int = Field(2, ge=0, le=5)
+
     @model_validator(mode="after")
     def _reject_placeholders(self) -> Settings:
         if self.app_env == "production":
@@ -67,6 +81,20 @@ class Settings(BaseSettings):
             host=self.db_host,
             port=self.db_port,
             database=self.db_name,
+        )
+
+    @property
+    def app_psycopg_conninfo(self) -> str:
+        """libpq conninfo for the runtime role (used by the LangGraph checkpointer)."""
+        from psycopg.conninfo import make_conninfo
+
+        return make_conninfo(
+            host=self.db_host,
+            port=self.db_port,
+            dbname=self.db_name,
+            user=self.db_app_user,
+            password=self.db_app_password.get_secret_value(),
+            application_name="localops-checkpointer",
         )
 
     @property

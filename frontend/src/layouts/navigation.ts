@@ -36,13 +36,13 @@ export const NAVIGATION: NavGroup[] = [
     label: "Overview",
     items: [
       { label: "Dashboard", path: "/", icon: LayoutDashboard, permission: "dashboard.read" },
-      { label: "AI Assistant", path: "/assistant", icon: Sparkles, permission: "incident.investigate", phase: 2 },
+      { label: "AI Assistant", path: "/assistant", icon: Sparkles, permission: "incident.investigate" },
     ],
   },
   {
     label: "Operations",
     items: [
-      { label: "Investigations", path: "/investigations", icon: Search, permission: "incident.read", phase: 2 },
+      { label: "Investigations", path: "/investigations", icon: Search, permission: "incident.read" },
       { label: "Incidents", path: "/incidents", icon: ShieldAlert, permission: "incident.read", phase: 4 },
       { label: "Approvals", path: "/approvals", icon: ClipboardCheck, permission: "approval.read", phase: 5 },
     ],
@@ -58,7 +58,7 @@ export const NAVIGATION: NavGroup[] = [
     label: "Intelligence",
     items: [
       { label: "Knowledge Base", path: "/knowledge", icon: BookOpen, permission: "knowledge.read", phase: 6 },
-      { label: "Agents", path: "/agents", icon: Bot, permission: "agent.read", phase: 2 },
+      { label: "Agents", path: "/agents", icon: Bot, permission: "agent.read" },
       { label: "Tools & Integrations", path: "/integrations", icon: Plug, permission: "integration.read", phase: 6 },
     ],
   },

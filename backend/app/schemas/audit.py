@@ -73,5 +73,9 @@ class DashboardSummary(BaseModel):
     resources: CountSummary
     incidents: IncidentSummary
     active_investigations: int = 0
+    investigations_24h: int = 0
+    agent_executions_24h: int = 0
+    agent_failures_24h: int = 0
+    default_model: str | None = None
     pending_approvals: int = 0
     knowledge_documents: int = 0

@@ -21,6 +21,15 @@ x-backend-env: &backend-env
   REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-7}
   COOKIE_SECURE: ${COOKIE_SECURE:-true}
   ENABLE_TELEMETRY: "false"
+  LOCALOPS_ENCRYPTION_KEY: ${LOCALOPS_ENCRYPTION_KEY:-}
+  LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_MODEL: ${LLM_MODEL:-}
+  INVESTIGATION_TIMEOUT_SECONDS: ${INVESTIGATION_TIMEOUT_SECONDS:-1800}
+  INVESTIGATION_MAX_CLARIFICATIONS: ${INVESTIGATION_MAX_CLARIFICATIONS:-2}
+  # Air-gapped: LangGraph/LangChain must never try to reach LangSmith.
+  LANGSMITH_TRACING: "false"
+  LANGCHAIN_TRACING_V2: "false"
 
 services:
   postgres:
@@ -98,6 +107,8 @@ services:
     container_name: localops-api
     restart: unless-stopped
     environment: *backend-env
+    # Lets endpoints like http://host.docker.internal:11434 reach a model server on the host.
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -110,6 +121,7 @@ services:
     restart: unless-stopped
     command: ["arq", "app.worker.WorkerSettings"]
     environment: *backend-env
+    extra_hosts: ["host.docker.internal:host-gateway"]
     healthcheck:
       test: ["CMD", "arq", "--check", "app.worker.WorkerSettings"]
       interval: 30s

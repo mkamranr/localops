@@ -1,9 +1,20 @@
 import { api } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import type {
+  Agent,
+  AgentConfig,
+  AgentExecution,
   AuditLog,
   DashboardSummary,
+  ExecutionMode,
+  Investigation,
+  InvestigationDetail,
+  InvestigationEvent,
   Me,
+  ModelEndpoint,
+  ModelSettings,
+  ModelTestResult,
+  Provider,
   Page,
   Permission,
   Role,
@@ -100,4 +111,66 @@ export const auditApi = {
 export const dashboardApi = {
   summary: () => api.get<DashboardSummary>("/dashboard/summary"),
   activity: (limit = 10) => api.get<AuditLog[]>("/dashboard/activity", { limit }),
+};
+
+export interface ModelInput {
+  name: string;
+  provider: Provider;
+  base_url: string;
+  model_name: string;
+  description?: string;
+  configuration?: ModelSettings;
+  api_key?: string;
+  clear_api_key?: boolean;
+  enabled?: boolean;
+  is_default?: boolean;
+}
+
+export const modelsApi = {
+  list: () => api.get<ModelEndpoint[]>("/models"),
+  create: (body: ModelInput) => api.post<ModelEndpoint>("/models", body),
+  update: (id: string, body: Partial<ModelInput>) => api.put<ModelEndpoint>(`/models/${id}`, body),
+  remove: (id: string) => api.delete(`/models/${id}`),
+  test: (id: string) => api.post<ModelTestResult>(`/models/${id}/test`),
+};
+
+export const agentsApi = {
+  list: () => api.get<Agent[]>("/agents"),
+  update: (
+    id: string,
+    body: Partial<{
+      name: string;
+      description: string;
+      model_id: string | null;
+      enabled: boolean;
+      configuration: Partial<Omit<AgentConfig, "allowed_tools">>;
+    }>,
+  ) => api.put<Agent>(`/agents/${id}`, body),
+  executions: (query: {
+    page: number;
+    page_size: number;
+    agent_type?: string;
+    investigation_id?: string;
+  }) => api.get<Page<AgentExecution>>("/agents/executions", { ...query }),
+};
+
+export interface InvestigationQuery {
+  page: number;
+  page_size: number;
+  status?: string;
+  q?: string;
+  active?: boolean;
+}
+
+export const investigationsApi = {
+  list: (query: InvestigationQuery) =>
+    api.get<Page<Investigation>>("/investigations", { ...query }),
+  get: (id: string) => api.get<InvestigationDetail>(`/investigations/${id}`),
+  events: (id: string, after = 0) =>
+    api.get<InvestigationEvent[]>(`/investigations/${id}/events`, { after }),
+  create: (body: { request: string; title?: string; execution_mode: ExecutionMode }) =>
+    api.post<Investigation>("/investigations", body),
+  resume: (id: string, answer: string) =>
+    api.post<Investigation>(`/investigations/${id}/resume`, { answer }),
+  cancel: (id: string) => api.post<Investigation>(`/investigations/${id}/cancel`),
 };

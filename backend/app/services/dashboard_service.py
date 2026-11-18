@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import case, func, select
 
-from app.models import AuditLog, User
+from app.models import ACTIVE_STATUSES, AgentExecution, AuditLog, Investigation, ModelEndpoint, User
 from app.schemas.audit import (
     ActivitySummary,
     CountSummary,
@@ -46,6 +46,27 @@ async def summary(ctx: RequestContext, services: list[ServiceHealth]) -> Dashboa
         )
     ).one()
 
+    inv = (
+        await s.execute(
+            select(
+                func.count(case((Investigation.status.in_(ACTIVE_STATUSES), 1))),
+                func.count(case((Investigation.started_at >= since, 1))),
+            )
+        )
+    ).one()
+    ex = (
+        await s.execute(
+            select(func.count(), func.count(case((AgentExecution.status == "failed", 1)))).where(
+                AgentExecution.started_at >= since
+            )
+        )
+    ).one()
+    default_model = await s.scalar(
+        select(ModelEndpoint.name).where(
+            ModelEndpoint.is_default.is_(True), ModelEndpoint.enabled.is_(True)
+        )
+    )
+
     return DashboardSummary(
         tenant=ctx.principal.tenant_slug,
         users=UserSummary(total=u[0], active=u[1], disabled=u[2]),
@@ -53,4 +74,9 @@ async def summary(ctx: RequestContext, services: list[ServiceHealth]) -> Dashboa
         services=services,
         resources=CountSummary(),
         incidents=IncidentSummary(),
+        active_investigations=inv[0],
+        investigations_24h=inv[1],
+        agent_executions_24h=ex[0],
+        agent_failures_24h=ex[1],
+        default_model=default_model,
     )

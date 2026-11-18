@@ -1,4 +1,4 @@
-# Architecture (Phase 1)
+# Architecture (Phase 2)
 
 LocalOps is a **modular monolith** (spec §25.1): one FastAPI backend image runs as `api`,
 `worker` and the one-shot `migrate`. A static React bundle is served behind an nginx reverse proxy.
@@ -11,7 +11,9 @@ flowchart LR
     API --> PG[(PostgreSQL<br/>RLS)]
     API --> REDIS[(Redis)]
     API -.readiness.-> QD[(Qdrant)]
-    WORKER[localops-worker<br/>arq] --> REDIS
+    WORKER[localops-worker<br/>arq + LangGraph] --> REDIS
+    WORKER --> PG
+    WORKER --> LLM[Model servers<br/>Ollama / vLLM / ...]
     MIGRATE[localops-migrate<br/>alembic + bootstrap] --> PG
     PROM[Prometheus<br/>optional] -.->|/metrics| API
 ```
@@ -22,11 +24,14 @@ flowchart LR
 backend/app/
 ├── main.py            app factory, middleware, routers, /metrics
 ├── cli.py             `python -m app.cli bootstrap`
-├── worker.py          arq worker (heartbeat cron; real jobs from Phase 2)
+├── worker.py          arq worker: investigation jobs, startup recovery, heartbeat
 ├── core/              config, security (argon2/JWT/refresh), permissions catalogue,
 │                      errors (JSON envelope), logging (structlog JSON), middleware, redis keys
 ├── database/          engine + tenant_session() (sets RLS context per transaction)
-├── models/            SQLAlchemy 2 models: identity (tenants/users/roles/...), audit
+├── models/            SQLAlchemy 2 models: identity, audit, ai (models/agents/investigations)
+├── llm/               model gateway (OpenAI-compatible, structured output, metrics)
+├── agents/            agent catalogue and Supervisor prompts/schemas
+├── graphs/            LangGraph investigation graph, runtime, runner, checkpointer, events
 ├── repositories/      query functions (always under RLS)
 ├── services/          business logic: auth, tenants, users/roles, audit, dashboard, health
 ├── schemas/           Pydantic request/response models
@@ -58,6 +63,10 @@ spec §9.1:
 
 Users are soft-deleted (`status='deleted'`) so audit history and username reservations stay intact.
 
+Revision `0002` adds `model_endpoints`, `agents`, `agent_executions`, `investigations`,
+`investigation_events`, and the LangGraph checkpoint tables (all under RLS). See
+[ai.md](ai.md) for the orchestration design.
+
 ## Frontend
 
 React 18, TypeScript, Vite, Tailwind v4, Radix primitives, TanStack Query and Zustand. It uses
@@ -66,11 +75,13 @@ system fonts only and runs fully offline.
 - `src/api/client.ts`: typed fetch client with single-flight refresh on 401 and the error envelope.
 - `src/layouts/navigation.ts`: the 13 sidebar entries (spec §12.1), filtered by permission and
   tagged with their delivery phase.
-- Pages: Login, Dashboard, Audit Logs, Settings (Account, Users, Roles, Tenants), plus "planned"
-  placeholders for screens arriving in later phases.
+- `src/api/sse.ts`: fetch-based Server-Sent Events client (Authorization header, `Last-Event-ID`
+  resume, backoff); `src/hooks/useInvestigationStream.ts` feeds the live timeline.
+- Pages: Login, Dashboard, AI Assistant, Investigations (list + workspace), Agents, Audit Logs,
+  Settings (Account, Users, Roles, AI Models, Tenants), plus "planned" placeholders for screens
+  arriving in later phases.
 
-## Planned next (Phase 2)
+## Planned next (Phase 3)
 
-Model gateway (vLLM, Ollama, OpenAI-compatible), LangGraph with PostgreSQL checkpointing,
-supervisor agent, investigation execution, and SSE streaming. The nginx `/api/` location is
-already unbuffered for SSE.
+Infrastructure inventory and discovery (Linux/SSH, Kubernetes, Docker, VMware, Proxmox),
+topology and dependency graphs. Entity resolution in investigations will then use the inventory.

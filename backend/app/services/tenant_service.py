@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from app.core.permissions import SUPER_ADMIN, TENANT_ADMIN, roles_for_tenant
 from app.core.security import hash_password
@@ -17,7 +18,9 @@ from app.repositories import identity as repo
 from app.schemas.common import PageParams
 from app.schemas.identity import TenantCreate, TenantUpdate
 from app.services import audit_service as audit
+from app.services.agent_service import ensure_agents
 from app.services.context import RequestContext
+from app.services.model_service import ensure_env_default_model
 
 
 async def seed_system_roles(
@@ -135,6 +138,7 @@ async def create_tenant(ctx: RequestContext, data: TenantCreate) -> Tenant:
     await set_tenant_context(session, tenant.id)
     try:
         roles = await seed_system_roles(session, tenant.id, is_system_tenant=False)
+        await seed_ai_defaults(session, tenant.id)
         admin = await create_user_with_roles(
             session,
             tenant_id=tenant.id,
@@ -258,4 +262,21 @@ async def ensure_platform_bootstrap(
                 entity_id=default.id,
                 details={"via": "bootstrap"},
             )
+
+    # Agents (and an env-configured default model) for every tenant, including tenants
+    # created before these features existed. Idempotent.
+    for tenant in list(await session.scalars(select(Tenant))):
+        await set_tenant_context(session, tenant.id)
+        added_agents, added_model = await seed_ai_defaults(session, tenant.id)
+        if added_agents:
+            notes.append(f"registered {added_agents} agents for tenant '{tenant.slug}'")
+        if added_model:
+            notes.append(f"created default model endpoint for tenant '{tenant.slug}'")
     return notes
+
+
+async def seed_ai_defaults(session: AsyncSession, tenant_id: uuid.UUID) -> tuple[int, bool]:
+    """Register catalogue agents and the env default model (session in tenant context)."""
+    added = await ensure_agents(session, tenant_id)
+    model = await ensure_env_default_model(session, get_settings(), tenant_id)
+    return added, model
