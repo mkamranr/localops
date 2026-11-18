@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 from typing import Any
 
@@ -146,6 +147,29 @@ async def test_structured_repairs_invalid_output() -> None:
     assert result.attempts == 2
     assert result.usage.prompt_tokens == 20 and result.usage.calls == 2
     assert convo_lengths[1] == convo_lengths[0] + 2  # bad answer + correction fed back
+
+
+async def test_single_leading_system_message() -> None:
+    """Templates like Mistral/Gemma reject system messages that aren't first."""
+    sent: list[list[dict[str, str]]] = []
+    replies = iter(['{"answer": "x"}', '{"answer": 7}'])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": next(replies)}}]})
+
+    client = ModelClient(_ep(), transport=httpx.MockTransport(handler))
+    await client.structured(
+        [ChatMessage("system", "You are the supervisor."), ChatMessage("user", "q")], Out
+    )
+    for messages in sent:
+        roles = [m["role"] for m in messages]
+        assert roles.count("system") == 1 and roles[0] == "system"
+        assert "You are the supervisor." in messages[0]["content"]
+        assert "JSON Schema" in messages[0]["content"]
+        # user/assistant strictly alternate after the system message
+        assert all(a != b for a, b in itertools.pairwise(roles[1:]))
+    assert [m["role"] for m in sent[1]] == ["system", "user", "assistant", "user"]
 
 
 async def test_structured_gives_up() -> None:

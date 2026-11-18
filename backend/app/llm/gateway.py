@@ -239,7 +239,7 @@ class ModelClient:
         ep = self.endpoint
         payload: dict[str, Any] = {
             "model": ep.model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": normalise_messages(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
@@ -414,6 +414,18 @@ class ModelClient:
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
             )
+
+
+def normalise_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    """Merge every system message into one leading system message.
+
+    Many chat templates (Mistral, Gemma, some Qwen/vLLM setups) reject a system
+    message anywhere but first, or more than one of them. Other messages keep their
+    order, so user/assistant alternation is preserved.
+    """
+    system = "\n\n".join(m.content for m in messages if m.role == "system" and m.content)
+    rest = [{"role": m.role, "content": m.content} for m in messages if m.role != "system"]
+    return ([{"role": "system", "content": system}] if system else []) + rest
 
 
 def _error_snippet(resp: httpx.Response) -> str:

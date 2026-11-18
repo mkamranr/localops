@@ -90,6 +90,12 @@ class FakeLLM:
         if self.fail_status:
             return httpx.Response(self.fail_status, json={"error": {"message": "boom"}})
         body = json.loads(request.content)
+        roles = [m["role"] for m in body["messages"]]
+        if "system" in roles[1:]:
+            # Behave like strict chat templates (Mistral, Gemma, some vLLM setups).
+            return httpx.Response(
+                400, json={"error": {"message": "System message must be at the beginning."}}
+            )
         system = " ".join(m["content"] for m in body["messages"] if m["role"] == "system")
         if "Classify the operator's request" in system:
             kind = "classify"
