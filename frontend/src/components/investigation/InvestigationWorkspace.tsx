@@ -4,18 +4,20 @@ import {
   Brain,
   CheckCircle2,
   CircleDashed,
-  FileText,
   Info,
   ListChecks,
   Loader2,
   MessageCircleQuestion,
   Radio,
   Send,
+  ShieldAlert,
   SkipForward,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { errorMessage } from "@/api/client";
-import { investigationsApi } from "@/api/endpoints";
+import { incidentsApi, investigationsApi } from "@/api/endpoints";
+import { severityFromUrgency } from "@/components/incidents/shared";
+import { RcaReport } from "@/components/investigation/RcaReport";
 import {
   ACTIVE,
   agentLabel,
@@ -30,11 +32,10 @@ import { Alert, Badge, EmptyState, ErrorState, Panel, Spinner } from "@/componen
 import { Input } from "@/components/ui/form";
 import { useInvestigationStream, type StreamState } from "@/hooks/useInvestigationStream";
 import { useAuthStore } from "@/stores/authStore";
-import { Link } from "react-router-dom";
-import { HealthBadge } from "@/components/inventory/shared";
-import type { InvestigationDetail, InvestigationEvent, InvestigationReport, ReportTask } from "@/types/api";
+import { Link, useNavigate } from "react-router-dom";
+import type { InvestigationDetail, InvestigationEvent, InvestigationReport, ReportTask, Severity } from "@/types/api";
 import { cn } from "@/utils/cn";
-import { formatDateTime, formatRelative } from "@/utils/format";
+import { formatDateTime } from "@/utils/format";
 
 interface Classification {
   request_type?: string;
@@ -77,6 +78,21 @@ function useDerived(inv: InvestigationDetail | undefined, events: InvestigationE
           status: "skipped",
           reason: String(e.event_data.reason ?? ""),
         });
+      }
+      if (e.event_data.task_id && e.event_data.node === "run_agent") {
+        if (e.event_type === "agent.started") {
+          outcomes.set(String(e.event_data.task_id), { status: "running", reason: null });
+        } else if (e.event_type === "agent.completed") {
+          outcomes.set(String(e.event_data.task_id), {
+            status: String(e.event_data.status ?? "completed"),
+            reason: null,
+          });
+        } else if (e.event_type === "agent.failed") {
+          outcomes.set(String(e.event_data.task_id), {
+            status: "failed",
+            reason: String(e.event_data.error ?? ""),
+          });
+        }
       }
     }
     if (!report.tasks) {
@@ -222,18 +238,35 @@ function StreamIndicator({ state }: { state: StreamState }) {
   );
 }
 
-/** Hide "started" lines once the same step has finished, keeping in-progress ones. */
+const stepKey = (e: InvestigationEvent) =>
+  `${e.agent_name}:${String(e.event_data.node)}:${String(e.event_data.task_id ?? "")}`;
+const toolKey = (e: InvestigationEvent) =>
+  `${e.agent_name}:${String(e.event_data.task_id ?? "")}:${String(e.event_data.tool)}`;
+
+/** Hide "started" lines once the same step or tool call has finished, keeping in-progress ones. */
 export function collapseTimeline(events: InvestigationEvent[]): InvestigationEvent[] {
   const finished = new Set(
     events
       .filter((e) => e.event_type === "agent.completed" || e.event_type === "agent.failed")
-      .map((e) => `${e.agent_name}:${String(e.event_data.node)}`),
+      .map(stepKey),
   );
-  return events.filter(
-    (e) =>
-      e.event_type !== "agent.started" ||
-      !finished.has(`${e.agent_name}:${String(e.event_data.node)}`),
-  );
+  // tool calls: each finish closes the earliest open start of the same tool
+  const open = new Map<string, number[]>();
+  const closed = new Set<number>();
+  for (const e of events) {
+    if (e.event_type === "tool.started") {
+      open.set(toolKey(e), [...(open.get(toolKey(e)) ?? []), e.seq]);
+    } else if (e.event_type === "tool.completed" || e.event_type === "tool.failed") {
+      const pending = open.get(toolKey(e)) ?? [];
+      const seq = pending.shift();
+      if (seq !== undefined) closed.add(seq);
+    }
+  }
+  return events.filter((e) => {
+    if (e.event_type === "agent.started") return !finished.has(stepKey(e));
+    if (e.event_type === "tool.started") return !closed.has(e.seq);
+    return true;
+  });
 }
 
 function Timeline({ events: all, state }: { events: InvestigationEvent[]; state: StreamState }) {
@@ -294,16 +327,24 @@ function PlanPanel({ tasks, waiting }: { tasks: ReportTask[]; waiting: boolean }
                   {agentLabel(t.agent)}
                 </span>
                 {t.status === "skipped" ? (
-                  <Badge tone="warning"><SkipForward className="size-3" /> skipped</Badge>
+                  <Badge tone="warning"><SkipForward className="size-3" /> no evidence</Badge>
                 ) : t.status === "completed" ? (
                   <Badge tone="success"><CheckCircle2 className="size-3" /> done</Badge>
+                ) : t.status === "failed" ? (
+                  <Badge tone="danger">failed</Badge>
+                ) : t.status === "running" ? (
+                  <Badge tone="primary"><Loader2 className="size-3 animate-spin" /> running</Badge>
                 ) : (
                   <Badge><CircleDashed className="size-3" /> {t.status.replace("_", " ")}</Badge>
                 )}
               </div>
               <p className="mt-1.5 text-sm text-fg/90">{t.objective}</p>
               {t.rationale && <p className="mt-1 text-xs text-muted">{t.rationale}</p>}
+              {t.summary && <p className="mt-1.5 text-xs text-fg/80">{t.summary}</p>}
               {t.reason && <p className="mt-1.5 text-[11px] text-amber-300/80">{t.reason}</p>}
+              {(t.notes ?? []).filter((n) => n !== t.reason).map((n) => (
+                <p key={n} className="mt-1 text-[11px] text-subtle">{n}</p>
+              ))}
             </li>
           ))}
         </ol>
@@ -348,89 +389,38 @@ function ClarificationBox({ inv }: { inv: InvestigationDetail }) {
   );
 }
 
-function ReportPanel({ inv }: { inv: InvestigationDetail }) {
-  const r = inv.result;
-  if (inv.status !== "completed" || !r.conclusion) return null;
+function IncidentLink({ inv }: { inv: InvestigationDetail }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const canCreate = useAuthStore((st) => st.hasPermission("incident.create"));
+  const create = useMutation({
+    mutationFn: () =>
+      incidentsApi.create({
+        title: inv.title.slice(0, 200),
+        description: inv.result.incident_summary || inv.result.summary || inv.request,
+        severity: (inv.result.triage?.severity as Severity | undefined) ?? severityFromUrgency(inv.result.urgency),
+        investigation_id: inv.id,
+      }),
+    onSuccess: (incident) => {
+      void queryClient.invalidateQueries({ queryKey: ["investigation", inv.id] });
+      navigate(`/incidents/${incident.id}`);
+    },
+  });
+  if (inv.incident_id) {
+    return (
+      <Link to={`/incidents/${inv.incident_id}`} className="inline-flex items-center gap-1.5 text-sm text-blue-300 hover:underline">
+        <ShieldAlert className="size-4" /> Open linked incident
+      </Link>
+    );
+  }
+  if (inv.status !== "completed" || !canCreate) return null;
   return (
-    <Panel title={<span className="flex items-center gap-2"><FileText className="size-4 text-green-400" /> Investigation report</span>}>
-      <div className="grid gap-5 lg:grid-cols-2">
-        <div className="space-y-3">
-          <div>
-            <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Conclusion</div>
-            <p className="text-sm text-fg">{r.conclusion}</p>
-          </div>
-          <div>
-            <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Root cause</div>
-            <p className="text-sm text-muted">{r.root_cause ??
-              (r.evidence?.length
-                ? "Not determined. Inventory facts show the current state but cannot establish a cause; diagnostic agents arrive in Phase 4."
-                : "Not determined. No supporting evidence was collected.")}</p>
-          </div>
-          {!r.evidence_sufficient && (
-            <Alert tone="warning">
-              No inventory evidence was found for this request. Make sure the affected resources are discovered; log,
-              metric and root-cause agents arrive in a later release.
-            </Alert>
-          )}
-        </div>
-        <div className="space-y-3">
-          <div>
-            <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Recommended next steps</div>
-            <ol className="space-y-1.5">
-              {(r.recommended_next_steps ?? []).map((s, i) => (
-                <li key={s} className="flex gap-2 text-sm text-fg/90">
-                  <span className="grid size-5 shrink-0 place-items-center rounded bg-surface-3 font-mono text-[11px] text-muted">{i + 1}</span>
-                  {s}
-                </li>
-              ))}
-            </ol>
-          </div>
-          {!!r.evidence?.length && (
-            <div>
-              <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Evidence ({r.evidence.length})</div>
-              <ul className="space-y-2">
-                {r.evidence.map((e, i) => (
-                  <li key={`${e.resource_id ?? e.resource}-${i}`} className="rounded-lg border border-border bg-surface-2 px-3 py-2">
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      {e.resource_id ? (
-                        <Link to={`/infrastructure/${e.resource_id}`} className="font-medium hover:underline">{e.resource}</Link>
-                      ) : (
-                        <span className="font-medium">{e.resource}</span>
-                      )}
-                      {e.health && <HealthBadge status={e.health} />}
-                      <span className="text-[11px] text-subtle">{e.source} · {agentLabel(e.agent)}{e.observed_at ? ` · ${formatRelative(e.observed_at)}` : ""}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-fg/80">{e.summary}</p>
-                    {!!e.findings?.length && (
-                      <ul className="mt-1 list-inside list-disc text-xs text-muted">
-                        {e.findings.map((f) => <li key={f}>{f}</li>)}
-                      </ul>
-                    )}
-                    {(!!e.depends_on?.length || !!e.dependents) && (
-                      <p className="mt-1 text-[11px] text-subtle">
-                        {e.depends_on?.length ? `Depends on ${e.depends_on.join(", ")}` : ""}
-                        {e.depends_on?.length && e.dependents ? " · " : ""}
-                        {e.dependents ? `${e.dependents} dependent resource${e.dependents === 1 ? "" : "s"}` : ""}
-                      </p>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {!!r.clarifications?.length && (
-            <div>
-              <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Clarifications</div>
-              {r.clarifications.map((c) => (
-                <p key={c.question} className="text-xs text-muted">
-                  <span className="text-fg/80">{c.question}</span> — {c.answer}
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </Panel>
+    <div className="flex items-center gap-2">
+      <Button variant="secondary" size="sm" onClick={() => create.mutate()} loading={create.isPending}>
+        <ShieldAlert /> Create incident
+      </Button>
+      {create.error && <span className="text-xs text-red-300">{errorMessage(create.error)}</span>}
+    </div>
   );
 }
 
@@ -497,7 +487,15 @@ export function InvestigationWorkspace({ id, compact = false }: { id: string; co
         <PlanPanel tasks={tasks} waiting={active} />
       </div>
 
-      <ReportPanel inv={inv} />
+      {inv.status === "completed" && inv.result.conclusion && (
+        <>
+          <div className="flex justify-end"><IncidentLink inv={inv} /></div>
+          <RcaReport inv={inv} />
+        </>
+      )}
+      {inv.status !== "completed" && inv.incident_id && (
+        <div className="flex justify-end"><IncidentLink inv={inv} /></div>
+      )}
     </div>
   );
 }

@@ -59,7 +59,7 @@ async def test_model_registry_and_agents(make_tenant: Any, fake_llm: FakeLLM) ->
     agents = (await s.get("/api/v1/agents")).json()
     assert agents[0]["agent_type"] == "supervisor" and agents[0]["implemented"]
     assert len(agents) == 11
-    assert {a["agent_type"]: a["available_in_phase"] for a in agents}["knowledge"] == 6
+    assert {a["agent_type"]: a["available_in_phase"] for a in agents}["knowledge"] == 4
 
     r = await s.post("/api/v1/models", json={**MODEL, "api_key": "sk-secret"})
     assert r.status_code == 201, r.text
@@ -137,7 +137,13 @@ async def test_investigation_end_to_end(app: FastAPI, make_tenant: Any, fake_llm
     assert inv["username"] == "tadmin"
     report = inv["result"]
     assert report["evidence"] == [] and report["root_cause"] is None
-    assert len(report["tasks"]) == 2
+    # planned diagnostics ran, found nothing resolvable, and did not guess
+    assert [t["agent"] for t in report["tasks"]] == [
+        "infrastructure_diagnostics",
+        "application_diagnostics",
+        "knowledge",
+    ]
+    assert {t["status"] for t in report["tasks"]} == {"skipped"}
 
     events = (await t.admin.get(f"/api/v1/investigations/{inv_id}/events")).json()
     seqs = [e["seq"] for e in events]
@@ -146,14 +152,15 @@ async def test_investigation_end_to_end(app: FastAPI, make_tenant: Any, fake_llm
     assert types[0] == "investigation.queued"
     assert types[1] == "investigation.started"
     assert types[-1] == "investigation.completed"
-    assert types.count("agent.skipped") == 2
+    assert "rca.generated" in types and "tool.started" not in types
 
     execs = (
         await t.admin.get("/api/v1/agents/executions", params={"investigation_id": inv_id})
     ).json()
-    assert execs["total"] == 5  # classify, resolve, plan, aggregate, report
+    # classify, resolve, plan, 3 specialists, aggregate, root cause, report
+    assert execs["total"] == 9
     assert {e["status"] for e in execs["items"]} == {"success"}
-    assert sum(e["llm_calls"] for e in execs["items"]) == 2
+    assert sum(e["llm_calls"] for e in execs["items"]) == 4  # + one tool turn per diagnostic
 
     agents = {a["agent_type"]: a for a in (await t.admin.get("/api/v1/agents")).json()}
     assert agents["supervisor"]["stats"]["executions_24h"] == 5
@@ -164,7 +171,7 @@ async def test_investigation_end_to_end(app: FastAPI, make_tenant: Any, fake_llm
     summary = (await t.admin.get("/api/v1/dashboard/summary")).json()
     assert summary["active_investigations"] == 0
     assert summary["investigations_24h"] == 1
-    assert summary["agent_executions_24h"] == 5
+    assert summary["agent_executions_24h"] == 9
     assert summary["default_model"] == "Local Ollama"
 
 
@@ -242,7 +249,7 @@ async def test_crash_recovery_resumes_from_checkpoint(
         redis=app.state.redis,
     )
     assert status == "completed"
-    assert fake_llm.calls == ["classify", "plan-crash", "plan"]
+    assert fake_llm.calls == ["classify", "plan-crash", "plan", "tools", "tools"]
     events = (await t.admin.get(f"/api/v1/investigations/{inv_id}/events")).json()
     assert "investigation.resumed" in [e["event_type"] for e in events]
     # Running again is a no-op.

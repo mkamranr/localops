@@ -23,6 +23,7 @@ from app.schemas.audit import (
     ServiceHealth,
     UserSummary,
 )
+from app.services import incident_service
 from app.services.context import RequestContext
 
 
@@ -85,13 +86,21 @@ async def summary(ctx: RequestContext, services: list[ServiceHealth]) -> Dashboa
         )
     ).one()
 
+    incidents = await incident_service.open_counts(s)
+
     return DashboardSummary(
         tenant=ctx.principal.tenant_slug,
         users=UserSummary(total=u[0], active=u[1], disabled=u[2]),
         activity=ActivitySummary(events_24h=a[0], logins_24h=a[1], failed_logins_24h=a[2]),
         services=services,
         resources=CountSummary(total=res[0], online=res[1], offline=res[2]),
-        incidents=IncidentSummary(),
+        incidents=IncidentSummary(
+            critical=incidents.get("critical", 0),
+            high=incidents.get("high", 0),
+            medium=incidents.get("medium", 0),
+            low=incidents.get("low", 0) + incidents.get("informational", 0),
+            open_total=sum(incidents.values()),
+        ),
         active_investigations=inv[0],
         investigations_24h=inv[1],
         agent_executions_24h=ex[0],

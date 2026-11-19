@@ -48,6 +48,8 @@ from app.models import (
     SshHostKey,
 )
 from app.services import audit_service as audit
+from app.services import incident_service
+from app.services.incident_service import HealthChange
 
 log = get_logger("localops.discovery")
 
@@ -245,7 +247,12 @@ async def _run_locked(
     # ---- phase 3: apply
     async with tenant_session(tenant_id) as s:
         return await apply_results(
-            s, tenant_id, run_id, results, retention_days=settings.metric_retention_days
+            s,
+            tenant_id,
+            run_id,
+            results,
+            retention_days=settings.metric_retention_days,
+            auto_incidents=settings.incident_auto_create,
         )
 
 
@@ -256,6 +263,7 @@ async def apply_results(
     results: list[TargetResult],
     *,
     retention_days: int = 30,
+    auto_incidents: bool = True,
 ) -> str:
     run = await s.get(DiscoveryRun, run_id)
     assert run is not None  # noqa: S101
@@ -276,6 +284,7 @@ async def apply_results(
     target_rows: list[dict[str, Any]] = []
     seen: dict[uuid.UUID, DiscoveredResource] = {}
     ok_labels: set[str] = set()
+    health_changes: list[HealthChange] = []
 
     for result in results:
         label = result.target.label
@@ -306,13 +315,17 @@ async def apply_results(
                     entity_id=integration.id,
                     details={"target": label, **result.details},
                 )
-            await _mark_unreachable(s, integration, label, result.error or "unreachable", now)
+            await _mark_unreachable(
+                s, integration, label, result.error or "unreachable", now, health_changes
+            )
             target_rows.append(row)
             continue
         stats["succeeded"] += 1
         ok_labels.add(label)
         for discovered in result.resources:
-            resource, outcome = await _upsert(s, tenant_id, integration, label, discovered, now)
+            resource, outcome = await _upsert(
+                s, tenant_id, integration, label, discovered, now, health_changes
+            )
             stats[outcome] += 1
             seen[resource.id] = discovered
         target_rows.append(row)
@@ -330,6 +343,12 @@ async def apply_results(
             )
         )
     stats["relationships_added"], stats["relationships_removed"] = added, removed
+    if health_changes:
+        opened = await incident_service.on_health_changes(
+            s, tenant_id, health_changes, create=auto_incidents
+        )
+        if opened:
+            stats["incidents_opened"] = opened
 
     status = (
         "completed" if stats["failed"] == 0 else ("partial" if stats["succeeded"] else "failed")
@@ -381,6 +400,7 @@ async def _upsert(
     label: str,
     d: DiscoveredResource,
     now: datetime,
+    health_changes: list[HealthChange],
 ) -> tuple[Resource, str]:
     status, reasons = health_rules.evaluate(d.resource_type, d.facts)
     resource = await s.scalar(select(Resource).where(Resource.external_id == d.external_id))
@@ -405,6 +425,7 @@ async def _upsert(
         )
         s.add(resource)
         await s.flush()
+        health_changes.append(HealthChange(resource, None, status, reasons))
         s.add(
             _event(
                 resource,
@@ -423,6 +444,7 @@ async def _upsert(
     if changes:
         s.add(_event(resource, "changed", change_summary(changes), {"changes": changes}))
     if status != resource.health_status:
+        health_changes.append(HealthChange(resource, resource.health_status, status, reasons))
         s.add(
             _event(
                 resource,
@@ -543,7 +565,12 @@ def change_summary(changes: dict[str, Any]) -> str:
 
 
 async def _mark_unreachable(
-    s: AsyncSession, integration: Integration, label: str, error: str, now: datetime
+    s: AsyncSession,
+    integration: Integration,
+    label: str,
+    error: str,
+    now: datetime,
+    health_changes: list[HealthChange],
 ) -> None:
     rows = await s.scalars(
         select(Resource).where(
@@ -558,6 +585,7 @@ async def _mark_unreachable(
         else:
             status, reasons = "unknown", ["Its host could not be collected"]
         if status != r.health_status:
+            health_changes.append(HealthChange(r, r.health_status, status, reasons))
             s.add(
                 _event(
                     r,

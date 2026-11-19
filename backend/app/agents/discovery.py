@@ -38,6 +38,19 @@ def _summary(r: Resource) -> dict[str, Any]:
     }
 
 
+async def resolve_ids(session: AsyncSession, ids: list[str]) -> list[dict[str, Any]]:
+    """Resources chosen explicitly (by id) count as resolved."""
+    out: list[dict[str, Any]] = []
+    for raw in dict.fromkeys(ids):
+        try:
+            r = await session.get(Resource, uuid.UUID(str(raw)))
+        except ValueError:
+            r = None
+        if r is not None:
+            out.append({"entity": r.name, "resolved": True, "match": "selected", **_summary(r)})
+    return out
+
+
 async def resolve_entities(session: AsyncSession, entities: list[str]) -> list[dict[str, Any]]:
     """Match entity names from the request against the inventory.
 

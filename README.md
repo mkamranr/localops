@@ -3,14 +3,24 @@
 **Open-source, AI-powered infrastructure operations and autonomous troubleshooting platform.**
 Self-hosted, multi-tenant, and designed to run in connected or fully air-gapped environments.
 
-> Status: **Phase 3 – Infrastructure Discovery** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
-> Phase 1 (authentication, tenants, RBAC, audit, dashboard, Compose deployment), Phase 2 (model
-> gateway for Ollama, vLLM, llama.cpp and any OpenAI-compatible server; agent registry;
-> Supervisor; LangGraph investigations with PostgreSQL checkpointing; live SSE progress), and
-> Phase 3: read-only discovery of Linux (SSH), Windows (WinRM), Docker and HTTP endpoints;
-> resource inventory with health, history and metrics; scheduled discovery; relationships;
-> dependency and blast-radius visualisation; inventory-verified investigations.
-> Diagnostic agents arrive in Phase 4.
+> Status: **Phase 4 – Investigation and RCA** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
+>
+> - **Phase 1:** authentication, tenants, RBAC, audit, dashboard, Compose deployment.
+> - **Phase 2:** a model gateway for Ollama, vLLM, llama.cpp and any OpenAI-compatible server;
+>   the agent registry; the Supervisor; LangGraph investigations with PostgreSQL checkpointing;
+>   live SSE progress.
+> - **Phase 3:** read-only discovery of Linux (SSH), Windows (WinRM), Docker and HTTP
+>   endpoints; a resource inventory with health, history and metrics; relationships and
+>   blast-radius views.
+> - **Phase 4:**
+>   - diagnostics agents that choose read-only tools by tool calling (processes, journal and
+>     event logs, container state and logs, HTTP, DNS and TCP checks), with redaction;
+>   - evidence-cited root cause analysis with confidence guards;
+>   - incidents, opened automatically when a resource turns unhealthy, with timeline,
+>     investigation and write-back;
+>   - similar-incident search, printable RCA reports, and live logs on resources.
+>
+> Approved remediation arrives in Phase 5.
 
 ## Quick start (Docker Compose)
 

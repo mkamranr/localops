@@ -9,7 +9,9 @@ export function Dialog({
   description,
   children,
   footer,
+  wide = false,
 }: {
+  wide?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -21,7 +23,7 @@ export function Dialog({
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
-        <RadixDialog.Content className="panel fixed top-1/2 left-1/2 z-50 max-h-[90vh] w-[min(95vw,32rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto shadow-2xl shadow-black/50">
+        <RadixDialog.Content className={`panel fixed top-1/2 left-1/2 z-50 max-h-[90vh] ${wide ? "w-[min(95vw,56rem)]" : "w-[min(95vw,32rem)]"} -translate-x-1/2 -translate-y-1/2 overflow-y-auto shadow-2xl shadow-black/50`}>
           <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div>
               <RadixDialog.Title className="text-base font-semibold">{title}</RadixDialog.Title>

@@ -9,8 +9,10 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from app.agents.assessments import Assessment
 from app.agents.catalogue import get_spec
-from app.agents.supervisor import PlannedTask, TaskPlan, sanitise_plan
+from app.agents.supervisor import PlannedTask, TaskPlan, ensure_coverage, sanitise_plan
+from app.agents.toolloop import ToolBudget
 from app.core.config import get_settings
 from app.graphs.investigation import build_graph
 from app.graphs.runtime import (
@@ -20,7 +22,9 @@ from app.graphs.runtime import (
     NodeCall,
 )
 from app.llm.gateway import EndpointConfig, ModelClient
-from tests.fakes import VAGUE, FakeLLM
+from app.tools.base import ToolSpec
+from app.tools.executor import ToolRunResult
+from tests.fakes import CLASSIFICATION, VAGUE, FakeLLM
 
 
 class MemoryRuntime(InvestigationRuntime):
@@ -39,6 +43,8 @@ class MemoryRuntime(InvestigationRuntime):
         # entity -> resolved resource summary
         self.inventory: dict[str, dict[str, Any]] = {}
         self.resource_ids: list[str] = []
+        self.tool_runs: list[tuple[str, str, dict[str, Any], str]] = []
+        self.tool_outputs: dict[str, tuple[str, str]] = {}
 
     async def emit(
         self, event_type: str, agent: str | None = None, data: dict[str, Any] | None = None
@@ -87,6 +93,45 @@ class MemoryRuntime(InvestigationRuntime):
     async def set_resource_ids(self, resource_ids: list[str]) -> None:
         self.resource_ids = resource_ids
 
+    async def resources_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        by_id = {r["resource_id"]: r for r in self.inventory.values()}
+        return [
+            {"entity": by_id[i]["name"], "resolved": True, **by_id[i]} for i in ids if i in by_id
+        ]
+
+    async def tool_budget(self) -> ToolBudget:
+        if self._budget is None:
+            self._budget = ToolBudget(self.settings.investigation_max_tool_calls)
+        return self._budget
+
+    async def run_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        evidence_id: str,
+        *,
+        agent_type: str,
+        allowed: list[ToolSpec],
+        allow_remote: bool,
+    ) -> ToolRunResult:
+        self.tool_runs.append((agent_type, name, arguments, evidence_id))
+        if name not in {t.name for t in allowed}:
+            return ToolRunResult(name, "rejected", "Rejected", f"ERROR: Unknown tool '{name}'")
+        output = self.tool_outputs.get(name, (f"{name} ok", f"output of {name}"))
+        return ToolRunResult(
+            name,
+            "success",
+            output[0],
+            output[1],
+            arguments=arguments,
+            resource_id=arguments.get("resource_id"),
+            resource_name="app-01",
+            resource_type="linux_server",
+        )
+
+    async def in_session(self, fn: Any) -> Any:
+        return Assessment(note="No history in the in-memory runtime")
+
     async def start_execution(self, agent_type: str, node: str) -> tuple[uuid.UUID, float]:
         self.executions.append({"agent": agent_type, "node": node, "status": "running"})
         return uuid.uuid4(), 0.0
@@ -122,21 +167,156 @@ async def test_full_run_produces_honest_report() -> None:
     assert report["classification_verified"] is False
     assert report["evidence"] == [] and report["evidence_sufficient"] is False
     assert report["root_cause"] is None
-    # unknown agent dropped, display-name agent normalised
+    assert "No diagnostic evidence" in report["conclusion"]
+    # unknown agent dropped, display-name agent normalised, knowledge added by coverage
     assert [t["agent"] for t in report["tasks"]] == [
         "infrastructure_diagnostics",
         "application_diagnostics",
+        "knowledge",
     ]
     assert all(t["status"] == "skipped" for t in report["tasks"])
-    assert "phase 4" in report["tasks"][0]["reason"]
+    # nothing resolved in the inventory: no tool ran and nothing was guessed
+    assert rt.tool_runs == []
 
     types = [e[0] for e in rt.events]
-    assert types.count("agent.skipped") == 2
-    for expected in ("supervisor.classified", "supervisor.plan_created", "report.generated"):
+    for expected in (
+        "supervisor.classified",
+        "supervisor.plan_created",
+        "rca.generated",
+        "report.generated",
+    ):
         assert expected in types
-    assert fake.calls == ["classify", "plan"]
+    assert sorted(fake.calls) == ["classify", "plan", "tools", "tools"]
     assert {e["status"] for e in rt.executions} == {"success"}
     assert rt.executions[0]["tokens"] == 120
+
+
+async def test_diagnostics_collect_evidence_and_rca_is_guarded() -> None:
+    rid = str(uuid.uuid4())
+    fake = FakeLLM(
+        classifications=[{**CLASSIFICATION, "affected_entities": ["app-01"]}],
+        plan={"tasks": [{"agent": "infrastructure_diagnostics", "objective": "Check CPU"}]},
+        tool_script={
+            "infrastructure_diagnostics": [
+                [("linux_system_snapshot", {"resource_id": rid})],
+                [("linux_top_processes", {"resource_id": rid}), ("rm_rf", {})],
+            ]
+        },
+        rca_statement="worker.py saturates the CPU",
+    )
+    rt = MemoryRuntime(fake)
+    rt.inventory["app-01"] = {
+        "name": "app-01",
+        "resource_id": rid,
+        "resource_type": "linux_server",
+        "health": "degraded",
+    }
+    rt.tool_outputs["linux_top_processes"] = (
+        "Top process: python worker.py (97% CPU)",
+        "PID 4242 97%",
+    )
+    graph = build_graph(rt, InMemorySaver())
+    state = await graph.ainvoke(
+        {
+            "request": "Why is CPU high on app-01?",
+            "execution_mode": "assisted",
+            "allow_remote": True,
+        },
+        _config(),
+    )
+    report = state["report"]
+    agents = [t["agent"] for t in report["tasks"]]
+    assert agents == ["infrastructure_diagnostics", "discovery", "knowledge"]
+    diag = [e for e in report["evidence"] if e["source"] == "tool"]
+    assert [e["tool"] for e in diag] == ["linux_system_snapshot", "linux_top_processes"]
+    assert [e["id"] for e in diag] == ["E1.1", "E1.2"]
+    assert [r[1] for r in rt.tool_runs] == ["linux_system_snapshot", "linux_top_processes", "rm_rf"]
+    root = report["root_cause"]
+    assert root["status"] == "confirmed" and root["statement"] == "worker.py saturates the CPU"
+    assert set(root["evidence_ids"]) >= {"E1.1", "E1.2"}
+    assert report["evidence_sufficient"] is True
+    assert report["conclusion"].startswith("Root cause (confirmed")
+    kinds = {f["kind"] for f in report["findings"]}
+    assert "confirmed_fact" in kinds
+    types = [e[0] for e in rt.events]
+    assert types.count("tool.completed") == 2 and "tool.failed" in types
+    assert "finding.recorded" in types
+    assert fake.calls.count("findings") == 1 and fake.calls.count("rca") == 1
+
+
+async def test_rca_downgrades_unsupported_confirmation() -> None:
+    rid = str(uuid.uuid4())
+    fake = FakeLLM(
+        classifications=[{**CLASSIFICATION, "affected_entities": ["app-01"]}],
+        plan={"tasks": []},
+        rca={
+            "root_cause": {
+                "statement": "Cosmic rays",
+                "status": "confirmed",
+                "confidence": 0.95,
+                "evidence_ids": ["E9.9"],
+            },
+        },
+    )
+    rt = MemoryRuntime(fake)
+    rt.inventory["app-01"] = {
+        "name": "app-01",
+        "resource_id": rid,
+        "resource_type": "linux_server",
+        "health": "unhealthy",
+    }
+    graph = build_graph(rt, InMemorySaver())
+    state = await graph.ainvoke(
+        {"request": "app-01 is down", "execution_mode": "assisted"}, _config()
+    )
+    report = state["report"]
+    # the claimed cause cites nothing known: it is never presented as the root cause
+    assert report["root_cause"] is None
+    assert report["alternative_hypotheses"][0]["statement"] == "Cosmic rays"
+    assert report["evidence_sufficient"] is False
+    assert "do not establish a root cause" in report["conclusion"]
+
+
+async def test_json_tool_protocol_when_tools_are_rejected() -> None:
+    rid = str(uuid.uuid4())
+    fake = FakeLLM(
+        classifications=[{**CLASSIFICATION, "affected_entities": ["app-01"]}],
+        plan={"tasks": [{"agent": "infrastructure_diagnostics", "objective": "Check CPU"}]},
+        tool_script={
+            "infrastructure_diagnostics": [[("linux_top_processes", {"resource_id": rid})]]
+        },
+        native_tools=False,
+    )
+    rt = MemoryRuntime(fake)
+    rt.inventory["app-01"] = {
+        "name": "app-01",
+        "resource_id": rid,
+        "resource_type": "linux_server",
+        "health": "degraded",
+    }
+    graph = build_graph(rt, InMemorySaver())
+    state = await graph.ainvoke(
+        {"request": "CPU high on app-01", "execution_mode": "assisted"}, _config()
+    )
+    assert [r[1] for r in rt.tool_runs] == ["linux_top_processes"]
+    assert state["report"]["root_cause"]["status"] == "probable"  # one tool item is not proof
+
+
+def test_coverage_adds_missing_specialists() -> None:
+    resources: list[dict[str, object]] = [
+        {"resolved": True, "name": "web", "resource_type": "docker_container"},
+        {"resolved": True, "name": "app-01", "resource_type": "linux_server"},
+    ]
+    tasks = ensure_coverage([], resources, "incident_investigation", triage=True)
+    assert [t.agent for t in tasks] == [
+        "incident_triage",
+        "discovery",
+        "application_diagnostics",
+        "infrastructure_diagnostics",
+        "knowledge",
+    ]
+    change = ensure_coverage([], resources, "change_impact")
+    assert [t.agent for t in change] == ["discovery", "change_impact"]
 
 
 async def test_clarification_interrupt_and_resume() -> None:

@@ -1,4 +1,4 @@
-# Security Model (Phase 3)
+# Security Model (Phase 4)
 
 ## Authentication
 
@@ -66,22 +66,30 @@ reads return nothing and cross-tenant writes are rejected (`test_investigations.
 - The model gateway only calls endpoints that an administrator configured. Model traffic ignores
   ambient proxy variables. LangSmith tracing is forced off.
 - Model output is **advisory and validated**. Every Supervisor result is parsed against a strict
-  schema. Planned tasks are filtered to known agents and capped. Nothing the model outputs runs a
-  command; tool execution arrives in Phase 5 behind the policy and approval engine.
-- Request text is passed to the model as delimited data, with an instruction to ignore embedded
-  instructions. This reduces, but cannot eliminate, prompt injection, which is why model output
-  never directly causes actions.
-- Reports never invent evidence. Entities are marked verified only when they match the
-  inventory, and evidence comes from stored inventory data, not from the model. No root cause is
-  stated until the Phase 4 diagnostic agents supply supporting evidence.
+  schema. Planned tasks are filtered to known agents and capped.
+- **The model can only choose read-only tools from a fixed catalogue** (see *Diagnostic tools*
+  below). It cannot supply a command, a script or a target outside the inventory. Tools that
+  change state, such as restarts or configuration changes, arrive in Phase 5 behind the policy
+  and approval engine.
+- Request text and tool output are passed to the model as delimited data, with an instruction
+  to ignore embedded instructions. This reduces, but cannot eliminate, prompt injection, which
+  is why model output can at most trigger read-only diagnostics.
+- Reports never invent evidence:
+  - Entities are marked verified only when they match the inventory.
+  - Evidence ids are created by LocalOps for real tool runs and inventory reads, never by the
+    model.
+  - Claims citing unknown or no evidence are downgraded to unverified hypotheses.
+  - A root cause is `confirmed` only with at least two successful tool results and confidence
+    of 0.7 or more.
 - Prompts and completions are not logged; only token counts, latency and outcome are.
 - `autonomous` execution mode is refused until Phase 5.
 
-## Infrastructure access (Phase 3)
+## Infrastructure access (Phase 3–4)
 
-- **Read-only, allowlisted collection.** Each collector holds a constant script: a POSIX shell
-  script piped to `sh -s`, fixed PowerShell, fixed `docker` CLI invocations, or Engine API GET
-  requests. No user-supplied or model-supplied text is ever executed on a target. Targets are
+- **Read-only, allowlisted collection.** Each discovery collector holds a constant script: a
+  POSIX shell script piped to `sh -s`, fixed PowerShell, fixed `docker` CLI invocations, or
+  Engine API GET requests. No user-supplied or model-supplied text is ever executed on a target
+  as code. Targets are
   validated as hostnames or IPs (no leading `-`, so no option injection), and only
   administrators with `integration.configure` can define them.
 - **Credentials** (passwords, private keys and passphrases, TLS client keys) are Fernet-encrypted
@@ -109,6 +117,53 @@ reads return nothing and cross-tenant writes are rejected (`test_investigations.
   never executes anything.
 - All seven inventory tables are under row-level security. Resources, relationships,
   integrations and host keys of other tenants return `404`.
+
+## Diagnostic tools (Phase 4)
+
+- **Fixed catalogue.** Every tool is defined in code: a Pydantic argument model, a command
+  template, the resource types it applies to, a timeout and an output cap. All tools are
+  `read` risk.
+- **Arguments.**
+  - Arguments are validated before anything runs: unit, service and provider names against
+    strict patterns, enums for logs and priorities, bounded integers for lines and time windows.
+  - Values are then quoted, with `shlex.quote` for shells and literal single quotes for
+    PowerShell.
+  - Attempts such as `; rm -rf /`, `$(...)`, backticks or a leading `-` are rejected and recorded
+    as `rejected`, never executed.
+- **Targets come from the inventory.** Tools take a `resource_id` and connect through that
+  resource's integration, with its pinned host key. Network checks (DNS, TCP, HTTP) accept only
+  inventoried resources, so the worker cannot be used to scan arbitrary addresses.
+- **Redaction.** Collected output passes through `app/tools/redaction.py` before it is stored,
+  streamed to the UI or given to a model. It masks:
+  - `password=`, `secret:`, `token=`, `api_key` and similar assignments;
+  - `Authorization` and Bearer/Basic values;
+  - private-key blocks;
+  - credentials in URLs;
+  - AWS access keys, GitHub and Slack tokens, and JWTs.
+
+  Raw output is never persisted. At most 16 KB of redacted output is stored per run, and at
+  most `TOOL_OUTPUT_MODEL_BYTES` reaches a model. Redaction is pattern-based, so it is best
+  effort: keep secrets out of logs at the source too.
+- **Permission and limits.**
+  - Remote tools need `tool.execute.readonly`, held by the user who started the investigation,
+    or by the user pressing *Run* on the Logs tab.
+  - Each investigation is limited to `INVESTIGATION_MAX_TOOL_CALLS` tool runs, with at most two
+    concurrent runs per host. Each tool has its own timeout.
+- **Accounts on the targets.** The diagnostics need read access only:
+  - Linux: membership of `systemd-journal` (or `adm`) to read the journal;
+  - Windows: membership of **Event Log Readers** to read the event logs;
+  - Docker: the `docker` group, as for discovery.
+- **Audit.** Every run writes a `tool_executions` row and a `tool.execute` audit entry with the
+  tool, the resource, the validated arguments, the status and the actor.
+
+## Incidents (Phase 4)
+
+- Four tables are under row-level security: `incidents`, `incident_resources`,
+  `incident_events` and `tool_executions`. `incident_events` is append-only for the app role.
+- Permissions: `incident.read`, `incident.create`, `incident.update` and
+  `incident.investigate`. Every create, update, comment, status change and close is audited.
+- Status changes are validated server-side. `awaiting_approval` and `remediating` can only be
+  set by the Phase 5 workflow, not through the API.
 
 ## Secrets at rest
 

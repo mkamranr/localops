@@ -79,3 +79,16 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _reset_tool_calling_cache() -> Iterator[None]:
+    """Endpoints that rejected native tools are remembered per process; isolate tests."""
+    from app.llm import tool_calling
+    from app.tools.transport import reset_host_slots, set_transport_factory
+
+    tool_calling._NATIVE_UNSUPPORTED.clear()
+    yield
+    tool_calling._NATIVE_UNSUPPORTED.clear()
+    set_transport_factory(None)
+    reset_host_slots()

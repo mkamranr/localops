@@ -42,6 +42,7 @@ MODEL_TOKENS = Counter("localops_model_tokens_total", "Model tokens", ["provider
 Provider = Literal["vllm", "ollama", "llamacpp", "openai_compatible"]
 StructuredMode = Literal["json_schema", "json_object", "none"]
 ThinkingMode = Literal["auto", "enabled", "disabled"]
+ToolCallingMode = Literal["auto", "native", "json"]
 
 # Extra completion tokens reserved for the reasoning of thinking models.
 THINKING_HEADROOM = 4096
@@ -59,9 +60,17 @@ def set_transport_override(transport: httpx.AsyncBaseTransport | None) -> None:
 class ModelError(Exception):
     """A model call failed (unreachable, HTTP error, unusable output)."""
 
-    def __init__(self, message: str, *, retryable: bool = False, detail: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        detail: str | None = None,
+        status: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.status = status
         # Excerpt of model output shown to operators (stored with the investigation,
         # never logged).
         self.detail = detail
@@ -79,6 +88,7 @@ class EndpointConfig:
     structured_output: StructuredMode = "json_object"
     context_window: int | None = None
     thinking: ThinkingMode = "auto"
+    tool_calling: ToolCallingMode = "auto"
 
     @property
     def api_base(self) -> str:
@@ -114,6 +124,7 @@ class EndpointConfig:
             structured_output=cfg.get("structured_output", "json_object"),
             context_window=cfg.get("context_window"),
             thinking=cfg.get("thinking", "auto"),
+            tool_calling=cfg.get("tool_calling", "auto"),
         )
 
 
@@ -141,6 +152,8 @@ class ChatResult:
     usage: Usage
     latency_ms: float
     finish_reason: str | None = None
+    # Native tool calls: [{"id", "name", "arguments" (JSON text)}]
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -343,6 +356,8 @@ class ModelClient:
         max_tokens: int = 1024,
         response_format: dict[str, Any] | None = None,
         request_timeout: float | None = None,
+        raw_messages: list[dict[str, Any]] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> ChatResult:
         """One chat completion.
 
@@ -354,7 +369,7 @@ class ModelClient:
         ep = self.endpoint
         payload: dict[str, Any] = {
             "model": ep.model,
-            "messages": normalise_messages(messages),
+            "messages": raw_messages if raw_messages is not None else normalise_messages(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
@@ -362,6 +377,8 @@ class ModelClient:
         }
         if response_format:
             payload["response_format"] = response_format
+        if extra:
+            payload.update(extra)
         payload.update(_thinking_extras(ep))
         # Fields some strict servers reject; dropped (once) on HTTP 400.
         optional = [k for k in ("stream_options", *_thinking_extras(ep)) if k in payload]
@@ -384,7 +401,8 @@ class ModelClient:
                     raise ModelError(f"Model endpoint returned HTTP {status}", retryable=True)
                 if status >= 400 or parsed is None:
                     raise ModelError(
-                        f"Model endpoint rejected the request (HTTP {status}): {error_text}"
+                        f"Model endpoint rejected the request (HTTP {status}): {error_text}",
+                        status=status,
                     )
                 raw_usage = parsed["usage"] or {}
                 usage = Usage(
@@ -398,6 +416,7 @@ class ModelClient:
                     usage=usage,
                     latency_ms=round(elapsed * 1000, 1),
                     finish_reason=parsed["finish_reason"],
+                    tool_calls=parsed.get("tool_calls") or [],
                 )
             except httpx.ReadTimeout:
                 # Re-sending would only wait the same way again.
@@ -597,10 +616,22 @@ def _parse_completion(data: dict[str, Any]) -> dict[str, Any]:
     message = choice.get("message") or {}
     # Reasoning servers (vLLM, SGLang, LM Studio, Ollama) may return the chain of
     # thought separately (reasoning_content); only ``content`` is the answer.
+    calls = []
+    for call in message.get("tool_calls") or []:
+        fn = call.get("function") or {}
+        args = fn.get("arguments")
+        calls.append(
+            {
+                "id": call.get("id") or "",
+                "name": fn.get("name") or "",
+                "arguments": args if isinstance(args, str) else json.dumps(args or {}),
+            }
+        )
     return {
         "content": message.get("content") or "",
         "finish_reason": choice.get("finish_reason"),
         "usage": data.get("usage"),
+        "tool_calls": calls,
     }
 
 
@@ -609,6 +640,7 @@ async def _read_event_stream(resp: httpx.Response) -> dict[str, Any]:
     parts: list[str] = []
     finish: str | None = None
     usage: dict[str, Any] | None = None
+    calls: dict[int, dict[str, Any]] = {}
     async for line in resp.aiter_lines():
         line = line.strip()
         if not line.startswith("data:"):
@@ -627,9 +659,23 @@ async def _read_event_stream(resp: httpx.Response) -> dict[str, Any]:
             delta = choice.get("delta") or {}
             if delta.get("content"):
                 parts.append(delta["content"])
+            for tc in delta.get("tool_calls") or []:
+                slot = calls.setdefault(
+                    int(tc.get("index", len(calls))), {"id": "", "name": "", "arguments": ""}
+                )
+                fn = tc.get("function") or {}
+                slot["id"] = tc.get("id") or slot["id"]
+                slot["name"] += fn.get("name") or ""
+                args = fn.get("arguments")
+                slot["arguments"] += args if isinstance(args, str) else json.dumps(args or {})
             if choice.get("finish_reason"):
                 finish = choice["finish_reason"]
-    return {"content": "".join(parts), "finish_reason": finish, "usage": usage}
+    return {
+        "content": "".join(parts),
+        "finish_reason": finish,
+        "usage": usage,
+        "tool_calls": [calls[i] for i in sorted(calls)],
+    }
 
 
 def _error_snippet(resp: httpx.Response) -> str:

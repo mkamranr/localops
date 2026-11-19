@@ -13,11 +13,15 @@ import {
   MessageCircleQuestion,
   PlayCircle,
   SkipForward,
+  Lightbulb,
   Sparkles,
+  Target,
+  Terminal,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/display";
-import type { InvestigationEvent, InvestigationStatus } from "@/types/api";
+import type { FindingKind, InvestigationEvent, InvestigationStatus } from "@/types/api";
 import { cn } from "@/utils/cn";
 
 export const STATUS_META: Record<
@@ -73,6 +77,26 @@ export function formatDuration(ms: number | null | undefined): string {
   return `${m}m ${Math.round(s % 60)}s`;
 }
 
+export const FINDING_META: Record<FindingKind, { label: string; tone: Tone }> = {
+  confirmed_fact: { label: "Confirmed fact", tone: "success" },
+  observation: { label: "Observation", tone: "primary" },
+  hypothesis: { label: "Hypothesis", tone: "warning" },
+};
+
+export const ROOT_CAUSE_META: Record<string, { label: string; tone: Tone }> = {
+  confirmed: { label: "Confirmed root cause", tone: "success" },
+  probable: { label: "Probable cause", tone: "warning" },
+  unverified: { label: "Unverified hypothesis", tone: "neutral" },
+};
+
+export function formatArgs(args: unknown): string {
+  if (!args || typeof args !== "object") return "";
+  return Object.entries(args as Record<string, unknown>)
+    .filter(([k]) => k !== "resource_id")
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join(" ");
+}
+
 interface EventView {
   icon: LucideIcon;
   tone: string;
@@ -94,8 +118,63 @@ export function describeEvent(e: InvestigationEvent): EventView {
     case "investigation.resumed":
       return { icon: PlayCircle, tone: "text-blue-400", title: `Investigation resumed (attempt ${str(d.attempt)})`, detail: "Continuing from the last checkpoint" };
     case "agent.started":
-      return { icon: CircleDot, tone: "text-blue-300", title: `${agent} · ${str(d.node).replace(/_/g, " ")}` };
+      return {
+        icon: CircleDot,
+        tone: "text-blue-300",
+        title: `${agent} · ${str(d.node).replace(/_/g, " ")}`,
+        detail: d.objective ? str(d.objective) : undefined,
+      };
+    case "tool.started":
+      return {
+        icon: Wrench,
+        tone: "text-cyan-300",
+        title: `${agent} → ${str(d.tool)}${d.evidence_id ? ` (${str(d.evidence_id)})` : ""}`,
+        detail: d.baseline ? "baseline collection" : formatArgs(d.arguments),
+      };
+    case "tool.completed":
+      return {
+        icon: Terminal,
+        tone: "text-cyan-400",
+        title: `${str(d.evidence_id)} · ${str(d.tool)} on ${str(d.resource) || "—"}`,
+        detail: `${str(d.summary)} · ${formatDuration(Number(d.duration_ms))}`,
+      };
+    case "tool.failed":
+      return {
+        icon: AlertTriangle,
+        tone: d.status === "rejected" ? "text-amber-400" : "text-red-400",
+        title: `${str(d.tool)} ${d.status === "rejected" ? "rejected" : "failed"}${d.evidence_id ? ` (${str(d.evidence_id)})` : ""}`,
+        detail: str(d.error),
+      };
+    case "finding.recorded":
+      return {
+        icon: Lightbulb,
+        tone: d.kind === "confirmed_fact" ? "text-green-400" : d.kind === "hypothesis" ? "text-amber-300" : "text-sky-300",
+        title: `${FINDING_META[(str(d.kind) as FindingKind) || "observation"]?.label ?? str(d.kind)}: ${str(d.statement)}`,
+        detail: ((d.evidence_ids as string[] | undefined) ?? []).join(", ") || "no evidence cited",
+      };
+    case "rca.generated": {
+      const rc = d.root_cause as { statement?: string; status?: string; confidence?: number } | null;
+      return rc
+        ? {
+            icon: Target,
+            tone: rc.status === "confirmed" ? "text-green-400" : "text-amber-400",
+            title: `Root cause ${rc.status}: ${rc.statement ?? ""}`,
+            detail: `confidence ${Math.round((rc.confidence ?? 0) * 100)}%`,
+          }
+        : { icon: Target, tone: "text-subtle", title: "No root cause established", detail: str(d.note) };
+    }
     case "agent.completed": {
+      if (d.task_id && d.node === "run_agent") {
+        const parts = [`${str(d.evidence_items ?? 0)} evidence`, formatDuration(Number(d.duration_ms))];
+        if (Number(d.tool_calls)) parts.push(`${str(d.tool_calls)} tool calls`);
+        if (Number(d.llm_calls)) parts.push(`${str(d.llm_calls)} model calls`);
+        return {
+          icon: d.status === "skipped" ? SkipForward : CheckCircle2,
+          tone: d.status === "skipped" ? "text-amber-400" : "text-green-400",
+          title: `${agent} ${d.status === "skipped" ? "found nothing to examine" : "finished"}`,
+          detail: parts.join(" · "),
+        };
+      }
       const tokens = Number(d.prompt_tokens ?? 0) + Number(d.completion_tokens ?? 0);
       const parts = [formatDuration(Number(d.duration_ms))];
       if (Number(d.llm_calls)) parts.push(`${str(d.llm_calls)} model call${Number(d.llm_calls) > 1 ? "s" : ""}`);
@@ -122,7 +201,7 @@ export function describeEvent(e: InvestigationEvent): EventView {
     case "clarification.answered":
       return { icon: MessageCircleQuestion, tone: "text-green-400", title: `Answered by ${str(d.answered_by)}`, detail: str(d.answer) };
     case "evidence.aggregated":
-      return { icon: Bot, tone: "text-sky-400", title: "Evidence aggregated", detail: `${str(d.evidence_items)} evidence items · ${str(d.skipped)} task(s) skipped · ${d.sufficient ? "sufficient" : "insufficient"}` };
+      return { icon: Bot, tone: "text-sky-400", title: "Evidence aggregated", detail: `${str(d.evidence_items)} evidence items (${str(d.tool_evidence ?? 0)} from tools) · ${str(d.skipped)} task(s) without evidence` };
     case "report.generated":
       return { icon: CheckCircle2, tone: "text-violet-400", title: "Report generated" };
     case "investigation.completed":

@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # --- Investigations ---
     investigation_timeout_seconds: int = Field(1800, ge=60)
     investigation_max_clarifications: int = Field(2, ge=0, le=5)
+    investigation_max_tool_calls: int = Field(30, ge=1, le=200)  # per investigation
+    tool_output_model_bytes: int = Field(6000, ge=1000, le=50000)  # tool output a model sees
+    incident_auto_create: bool = True  # open incidents when discovery sees failures
 
     # --- Infrastructure discovery ---
     discovery_concurrency: int = Field(8, ge=1, le=64)  # targets collected in parallel

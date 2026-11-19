@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-IMPLEMENTED_PHASE: Final = 3
+IMPLEMENTED_PHASE: Final = 4
 
 DEFAULT_AGENT_CONFIG: Final[dict[str, Any]] = {
     "temperature": 0.1,
@@ -57,42 +57,48 @@ CATALOGUE: Final[tuple[AgentSpec, ...]] = (
     AgentSpec(
         "incident_triage",
         "Incident Triage Agent",
-        "Assesses severity, blast radius and urgency of an incident.",
+        "Assesses severity and priority of an incident from health, environment, blast "
+        "radius and other open incidents, and suggests investigation paths.",
         4,
         capabilities=("severity", "impact"),
     ),
     AgentSpec(
         "infrastructure_diagnostics",
         "Infrastructure Diagnostics Agent",
-        "Inspects hosts, VMs, containers and clusters: CPU, memory, disk, services.",
+        "Inspects Linux and Windows hosts with read-only tools: CPU, memory, disk, "
+        "processes, services and system logs.",
         4,
         capabilities=("hosts", "kubernetes", "virtualisation"),
     ),
     AgentSpec(
         "application_diagnostics",
         "Application Diagnostics Agent",
-        "Analyses application logs, error rates and dependencies.",
+        "Inspects containers and HTTP services: state, restarts, logs, HTTP health and "
+        "recent changes.",
         4,
         capabilities=("logs", "applications"),
     ),
     AgentSpec(
         "network_diagnostics",
         "Network Diagnostics Agent",
-        "Checks reachability, DNS, ports, routes, load balancers and certificates.",
+        "Checks DNS resolution, TCP ports and HTTP reachability of inventoried resources "
+        "from LocalOps.",
         4,
         capabilities=("dns", "connectivity", "tls"),
     ),
     AgentSpec(
         "root_cause_analysis",
         "Root Cause Analysis Agent",
-        "Correlates evidence from other agents into ranked root-cause hypotheses.",
+        "Correlates evidence from the other agents into a root-cause analysis; runs "
+        "automatically after the specialists.",
         4,
         capabilities=("correlation", "hypotheses"),
     ),
     AgentSpec(
         "change_impact",
         "Change Impact Agent",
-        "Evaluates the blast radius and risk of a proposed infrastructure change.",
+        "Evaluates dependents, active incidents and environment to rate the risk of a "
+        "proposed change and recommend precautions.",
         4,
         capabilities=("dependencies", "risk"),
     ),
@@ -113,8 +119,9 @@ CATALOGUE: Final[tuple[AgentSpec, ...]] = (
     AgentSpec(
         "knowledge",
         "Knowledge Agent",
-        "Searches runbooks, past incidents and documentation.",
-        6,
+        "Searches past incidents and investigations for similar issues and their "
+        "resolutions (runbooks arrive with the knowledge base).",
+        4,
         capabilities=("rag", "runbooks"),
     ),
 )

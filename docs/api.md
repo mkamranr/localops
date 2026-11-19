@@ -1,4 +1,4 @@
-# REST API (Phase 3)
+# REST API (Phase 4)
 
 Base path: `/api/v1`. Interactive OpenAPI docs are at `/api/v1/docs` when `APP_ENV` is not
 `production`.
@@ -25,7 +25,7 @@ the refresh token is set as an `httpOnly` cookie.
 | GET | `/roles`, `/roles/{id}` | `role.read` | |
 | GET | `/permissions` | `role.read` | |
 | GET | `/audit-logs?action=&outcome=&user_id=&entity_type=&entity_id=&date_from=&date_to=` | `audit.read` | `action` is a prefix match |
-| GET | `/dashboard/summary` | `dashboard.read` | Counts + service health (resources are live; incidents and approvals are placeholders) |
+| GET | `/dashboard/summary` | `dashboard.read` | Counts + service health (resources and incidents are live; approvals are a placeholder) |
 | GET | `/dashboard/activity?limit=` | `dashboard.read` + `audit.read` | |
 | GET | `/models` · `/models/{id}` | `settings.read` | API keys are never returned (`has_api_key`) |
 | POST | `/models` | `settings.manage` | First model becomes the default |
@@ -35,13 +35,28 @@ the refresh token is set as an `httpOnly` cookie.
 | PUT | `/agents/{id}` | `agent.configure` | `model_id` (null = default), `enabled`, `configuration` |
 | POST | `/agents/{id}/enable` · `/disable` | `agent.configure` | |
 | GET | `/agents/executions?agent_type=&investigation_id=` | `agent.read` | Paginated execution records |
-| POST | `/investigations` | `incident.investigate` | `{request, title?, execution_mode}` → 202, queued |
-| GET | `/investigations?status=&active=&q=` | `incident.read` | Paginated |
+| POST | `/investigations` | `incident.investigate` | `{request, title?, execution_mode, resource_ids?, incident_id?, investigation_type?}` → 202, queued. Explicit resources count as resolved |
+| GET | `/investigations?status=&active=&q=` | `incident.read` | Paginated; completed items carry a `report` brief (conclusion, root cause, confidence) |
 | GET | `/investigations/{id}` | `incident.read` | Includes `result` (report) |
 | GET | `/investigations/{id}/events?after=` | `incident.read` | Ordered by `seq` |
 | GET | `/investigations/{id}/stream` | `incident.read` | SSE; honours `Last-Event-ID`; ends with `event: end` |
 | POST | `/investigations/{id}/resume` | `incident.investigate` | `{answer}` when status is `awaiting_input` |
 | POST | `/investigations/{id}/cancel` | `incident.investigate` | Immediate if waiting; otherwise at the next step |
+| GET | `/investigations/{id}/tool-executions` | `incident.read` | Tool runs with redacted output and evidence ids |
+| GET | `/incidents?status=&severity=&source=&assigned_to=&resource_id=&open=&q=` | `incident.read` | Paginated; `q` is full-text |
+| GET | `/incidents/summary` | `incident.read` | Open counts by severity and status |
+| POST | `/incidents` | `incident.create` | `{title, description, severity, priority?, resource_ids?, assigned_to?, investigation_id?}` → 201 |
+| GET | `/incidents/{id}` | `incident.read` | Includes resources, linked investigations and `allowed_transitions` |
+| PUT | `/incidents/{id}` | `incident.update` | Title, description, severity, priority, status (validated transition), `assigned_to`, `resource_ids` |
+| POST | `/incidents/{id}/close` | `incident.update` | `{resolution, status: resolved\|closed}` |
+| POST | `/incidents/{id}/investigate` | `incident.investigate` | `{request?, execution_mode?}` → 202; uses the incident's resources and moves it to `investigating` |
+| GET | `/incidents/{id}/timeline` | `incident.read` | Status, assignment, comments, investigations, resource health |
+| POST | `/incidents/{id}/comments` | `incident.update` | `{body}` |
+| GET | `/incidents/{id}/similar` | `incident.read` | Past incidents and investigations by text and shared resources |
+| GET | `/incidents/{id}/tool-executions` | `incident.read` | Tool runs from the linked investigations |
+| GET | `/tools?resource_type=` | `incident.read` | The read-only tool catalogue with argument schemas |
+| POST | `/tools/{name}/run` | `tool.execute.readonly` | `{resource_id, arguments}` → status, summary, redacted output (audited) |
+| GET | `/resources/{id}/tool-executions?limit=` | `resource.read` | Recent tool runs on that resource |
 | GET | `/integrations` · `/integrations/{id}` | `integration.read` | Credentials are never returned (`has_credentials`, `credential_fields`) |
 | POST | `/integrations` | `integration.configure` | `{name, integration_type, configuration, credentials, targets, schedule_minutes}` |
 | PUT/DELETE | `/integrations/{id}` | `integration.configure` | Omit `credentials` to keep them; `clear_credentials`, `clear_schedule`. Delete keeps discovered resources |
@@ -75,10 +90,16 @@ the refresh token is set as an `httpOnly` cookie.
 Common codes: `unauthenticated`, `token_expired`, `token_revoked`, `invalid_credentials`,
 `invalid_refresh_token`, `account_inactive`, `forbidden`, `not_found`, `conflict`,
 `validation_error`, `rate_limited`, `service_unavailable`, `internal_error`, `mode_unavailable`,
-`invalid_model`, `encryption_unavailable`, `run_in_progress`.
+`invalid_model`, `encryption_unavailable`, `run_in_progress`, `invalid_transition`.
 
 Collector failures are reported per target in a run's `target_results` with an `error_code`:
 `unreachable`, `timeout`, `auth_failed`, `host_key_changed`, `missing_credentials`,
 `docker_permission_denied`, `winrm_error`, `bad_output`.
+
+Tool runs that fail report an `error_code` too:
+- `invalid_arguments` (rejected, never executed);
+- `permission_denied`, `missing_credentials`, `no_integration`, `no_target`, `no_address`,
+  `host_key_not_pinned`;
+- `unreachable`, `timeout`, `unsupported`.
 
 Resources in other tenants always return `404`, never `403`, so their existence isn't revealed.

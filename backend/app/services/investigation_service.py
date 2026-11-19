@@ -17,7 +17,7 @@ from app.database.session import tenant_session
 from app.graphs import events
 from app.graphs.dispatch import InvestigationDispatcher
 from app.graphs.investigation import WORKFLOW_ID
-from app.models import ACTIVE_STATUSES, TERMINAL_STATUSES, Investigation, User
+from app.models import ACTIVE_STATUSES, TERMINAL_STATUSES, Incident, Investigation, Resource, User
 from app.schemas.ai import (
     InvestigationCreate,
     InvestigationDetail,
@@ -26,6 +26,7 @@ from app.schemas.ai import (
 )
 from app.schemas.common import PageParams
 from app.services import audit_service as audit
+from app.services import incident_service
 from app.services.context import ClientInfo, Principal, RequestContext
 
 
@@ -51,6 +52,14 @@ async def create(
             "release). Use manual or assisted mode."
         )
     async with tenant_session(principal.tenant_id) as s:
+        resource_ids = list(dict.fromkeys(data.resource_ids))
+        if resource_ids:
+            found = set(await s.scalars(select(Resource.id).where(Resource.id.in_(resource_ids))))
+            missing = [str(r) for r in resource_ids if r not in found]
+            if missing:
+                raise NotFoundError("Resource not found", details={"resource_ids": missing})
+        if data.incident_id is not None and await s.get(Incident, data.incident_id) is None:
+            raise NotFoundError("Incident not found")
         inv = Investigation(
             tenant_id=principal.tenant_id,
             user_id=principal.user_id,
@@ -59,11 +68,15 @@ async def create(
             request=data.request,
             status="queued",
             execution_mode=data.execution_mode,
-            resource_ids=[],
+            incident_id=data.incident_id,
+            investigation_type=data.investigation_type,
+            resource_ids=[str(r) for r in resource_ids],
             result={},
         )
         s.add(inv)
         await s.flush()
+        if data.incident_id is not None:
+            await incident_service.link_investigation(s, data.incident_id, inv, principal.username)
         await events.append_event(
             s,
             tenant_id=principal.tenant_id,

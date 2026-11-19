@@ -33,6 +33,7 @@ from app.schemas.ai import (
     InvestigationEventOut,
     InvestigationOut,
     InvestigationResume,
+    ReportBrief,
 )
 from app.schemas.common import Page, PageParams
 from app.services import investigation_service as svc
@@ -67,7 +68,12 @@ async def list_investigations(
 ) -> Page[InvestigationOut]:
     rows, total = await svc.list_investigations(ctx, page, status=status, q=q, active=active)
     return Page(
-        items=[InvestigationOut.model_validate(r) for r in rows],
+        items=[
+            InvestigationOut.model_validate(r).model_copy(
+                update={"report": ReportBrief.from_result(r.result)}
+            )
+            for r in rows
+        ],
         total=total,
         page=page.page,
         page_size=page.page_size,

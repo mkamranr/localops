@@ -145,6 +145,12 @@ class Investigation(UUIDPkMixin, Base):
             ["users.id", "users.tenant_id"],
             name="fk_investigations_user_tenant",
         ),
+        ForeignKeyConstraint(
+            ["incident_id", "tenant_id"],
+            ["incidents.id", "incidents.tenant_id"],
+            name="fk_investigations_incident_tenant",
+        ),
+        Index("ix_investigations_incident", "incident_id"),
         CheckConstraint(f"status IN {INVESTIGATION_STATUSES!r}", name="status"),
         CheckConstraint("execution_mode IN ('manual','assisted','autonomous')", name="mode"),
         Index("ix_investigations_tenant_started", "tenant_id", "started_at"),
@@ -152,7 +158,6 @@ class Investigation(UUIDPkMixin, Base):
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    # FK to incidents is added in Phase 4 together with the incidents table.
     incident_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(100), nullable=False)

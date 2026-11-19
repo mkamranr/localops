@@ -39,6 +39,18 @@ import type {
   Tenant,
   TokenResponse,
   User,
+  Incident,
+  IncidentDetail,
+  IncidentEvent,
+  IncidentInput,
+  IncidentStats,
+  IncidentStatus,
+  Priority,
+  Severity,
+  SimilarItem,
+  ToolExecution,
+  ToolInfo,
+  ToolRunResult,
 } from "@/types/api";
 
 export const authApi = {
@@ -117,6 +129,7 @@ export interface AuditQuery {
   page: number;
   page_size: number;
   action?: string;
+  entity_id?: string;
   outcome?: string;
   date_from?: string;
   date_to?: string;
@@ -186,8 +199,14 @@ export const investigationsApi = {
   get: (id: string) => api.get<InvestigationDetail>(`/investigations/${id}`),
   events: (id: string, after = 0) =>
     api.get<InvestigationEvent[]>(`/investigations/${id}/events`, { after }),
-  create: (body: { request: string; title?: string; execution_mode: ExecutionMode }) =>
-    api.post<Investigation>("/investigations", body),
+  create: (body: {
+    request: string;
+    title?: string;
+    execution_mode: ExecutionMode;
+    resource_ids?: string[];
+    incident_id?: string;
+  }) => api.post<Investigation>("/investigations", body),
+  toolExecutions: (id: string) => api.get<ToolExecution[]>(`/investigations/${id}/tool-executions`),
   resume: (id: string, answer: string) =>
     api.post<Investigation>(`/investigations/${id}/resume`, { answer }),
   cancel: (id: string) => api.post<Investigation>(`/investigations/${id}/cancel`),
@@ -263,4 +282,53 @@ export const resourcesApi = {
     description?: string;
   }) => api.post<Relationship>("/resource-relationships", body),
   removeRelationship: (id: string) => api.delete(`/resource-relationships/${id}`),
+};
+
+// ------------------------------------------------------------------ incidents & tools (Phase 4)
+
+export interface IncidentQuery {
+  page: number;
+  page_size: number;
+  status?: string;
+  severity?: string;
+  source?: string;
+  assigned_to?: string;
+  resource_id?: string;
+  open?: boolean;
+  q?: string;
+}
+
+export interface IncidentUpdate {
+  title?: string;
+  description?: string;
+  severity?: Severity;
+  priority?: Priority;
+  status?: IncidentStatus;
+  assigned_to?: string | null;
+  resolution?: string;
+  resource_ids?: string[];
+}
+
+export const incidentsApi = {
+  list: (query: IncidentQuery) => api.get<Page<Incident>>("/incidents", { ...query }),
+  summary: () => api.get<IncidentStats>("/incidents/summary"),
+  get: (id: string) => api.get<IncidentDetail>(`/incidents/${id}`),
+  create: (body: IncidentInput) => api.post<IncidentDetail>("/incidents", body),
+  update: (id: string, body: IncidentUpdate) => api.put<IncidentDetail>(`/incidents/${id}`, body),
+  close: (id: string, resolution: string, status: "resolved" | "closed" = "closed") =>
+    api.post<IncidentDetail>(`/incidents/${id}/close`, { resolution, status }),
+  investigate: (id: string, body: { request?: string; execution_mode?: ExecutionMode } = {}) =>
+    api.post<Investigation>(`/incidents/${id}/investigate`, body),
+  timeline: (id: string) => api.get<IncidentEvent[]>(`/incidents/${id}/timeline`),
+  comment: (id: string, body: string) => api.post<IncidentEvent>(`/incidents/${id}/comments`, { body }),
+  similar: (id: string) => api.get<SimilarItem[]>(`/incidents/${id}/similar`),
+  toolExecutions: (id: string) => api.get<ToolExecution[]>(`/incidents/${id}/tool-executions`),
+};
+
+export const toolsApi = {
+  list: (resource_type?: string) => api.get<ToolInfo[]>("/tools", { resource_type }),
+  run: (name: string, resource_id: string, args: Record<string, unknown>) =>
+    api.post<ToolRunResult>(`/tools/${name}/run`, { resource_id, arguments: args }),
+  forResource: (id: string, limit = 50) =>
+    api.get<ToolExecution[]>(`/resources/${id}/tool-executions`, { limit }),
 };

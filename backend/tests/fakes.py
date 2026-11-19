@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -62,20 +63,121 @@ class FakeLLM:
     calls: list[str] = field(default_factory=list)
     auth_headers: list[str | None] = field(default_factory=list)
     before_reply: Callable[[str], None] | None = None
+    # agent_type -> steps; each step is a list of (tool, arguments) calls
+    tool_script: dict[str, list[list[tuple[str, dict[str, Any]]]]] = field(default_factory=dict)
+    native_tools: bool = True  # False: reject `tools` with HTTP 400 like old servers
+    rca: dict[str, Any] | None = None
+    rca_statement: str = "The cause is shown by the collected evidence."
+    tool_requests: list[dict[str, Any]] = field(default_factory=list)
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
 
-    def _reply(self, content: str) -> httpx.Response:
+    def _reply(
+        self, content: str | None, tool_calls: list[dict[str, Any]] | None = None
+    ) -> httpx.Response:
+        message: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
         return httpx.Response(
             200,
             json={
                 "id": "cmpl-1",
                 "choices": [
-                    {"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                    {"message": message, "finish_reason": "tool_calls" if tool_calls else "stop"}
                 ],
                 "usage": {"prompt_tokens": 120, "completion_tokens": 40},
             },
+        )
+
+    # ---------------------------------------------------------------- tools
+
+    def _agent_of(self, system: str) -> str:
+        m = re.search(r"You are the ([A-Za-z ]+?) Agent of LocalOps", system)
+        return m.group(1).strip().lower().replace(" ", "_") if m else "unknown"
+
+    def _tool_turn(self, body: dict[str, Any], system: str) -> httpx.Response:
+        agent = self._agent_of(system)
+        steps = self.tool_script.get(agent, [])
+        self.tool_requests.append(body)
+        if "tools" in body:
+            done = sum(
+                1 for m in body["messages"] if m["role"] == "assistant" and m.get("tool_calls")
+            )
+            if done >= len(steps):
+                return self._reply("The evidence is collected.")
+            calls = [
+                {
+                    "id": f"call-{done}-{i}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(args)},
+                }
+                for i, (name, args) in enumerate(steps[done])
+            ]
+            return self._reply(None, calls)
+        # json protocol: one action per reply
+        done = sum(1 for m in body["messages"] if m["role"] == "assistant")
+        flat = [c for step in steps for c in step]
+        if done >= len(flat):
+            return self._reply(json.dumps({"final": "The evidence is collected."}))
+        name, args = flat[done]
+        return self._reply(json.dumps({"tool": name, "arguments": args}))
+
+    @staticmethod
+    def _evidence(user: str) -> list[tuple[str, str, bool]]:
+        out = []
+        for m in re.finditer(
+            r"^\[(E\d+\.\d+)\][^\n]*?(\(FAILED\))?\nsummary: ([^\n]*)", user, re.M
+        ):
+            out.append((m.group(1), m.group(3), not m.group(2)))
+        return out
+
+    def _findings(self, user: str) -> str:
+        ev = self._evidence(user)
+        return json.dumps(
+            {
+                "summary": f"{len(ev)} evidence items reviewed.",
+                "observations": [
+                    {
+                        "statement": summary,
+                        "kind": "confirmed_fact" if ok else "observation",
+                        "evidence_ids": [eid],
+                    }
+                    for eid, summary, ok in ev
+                ],
+                "hypotheses": [],
+            }
+        )
+
+    def _rca(self, user: str) -> str:
+        if self.rca is not None:
+            return json.dumps(self.rca)
+        ids = [eid for eid, _, ok in self._evidence(user) if ok]
+        return json.dumps(
+            {
+                "incident_summary": "Summary of the incident.",
+                "root_cause": {
+                    "statement": self.rca_statement,
+                    "status": "confirmed",
+                    "confidence": 0.85,
+                    "evidence_ids": ids,
+                },
+                "contributing_factors": [],
+                "alternative_hypotheses": [
+                    {"statement": "Something else", "likelihood": "low", "evidence_ids": []}
+                ],
+                "impact": "Users are affected.",
+                "recommended_remediation": [
+                    {
+                        "action": "Apply the fix",
+                        "rationale": "Removes the cause",
+                        "risk": "low",
+                        "evidence_ids": ids[:1],
+                    }
+                ],
+                "preventive_recommendations": ["Add monitoring"],
+                "evidence_gaps": [],
+            }
         )
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -97,6 +199,12 @@ class FakeLLM:
                 400, json={"error": {"message": "System message must be at the beginning."}}
             )
         system = " ".join(m["content"] for m in body["messages"] if m["role"] == "system")
+        user = "\n".join(m["content"] or "" for m in body["messages"] if m["role"] == "user")
+        if "calling the read-only diagnostic tools" in system:
+            if "tools" in body and not self.native_tools:
+                return httpx.Response(400, json={"error": {"message": "tools are not supported"}})
+            self.calls.append("tools")
+            return self._tool_turn(body, system)
         if "Classify the operator's request" in system:
             kind = "classify"
             idx = min(sum(1 for c in self.calls if c == "classify"), len(self.classifications) - 1)
@@ -108,6 +216,12 @@ class FakeLLM:
                 self.calls.append("plan-crash")
                 raise SimulatedCrashError
             content = "<think>planning…</think>```json\n" + json.dumps(self.plan) + "\n```"
+        elif "turn collected diagnostic evidence into findings" in system:
+            kind = "findings"
+            content = self._findings(user)
+        elif "Root Cause Analysis agent" in system:
+            kind = "rca"
+            content = self._rca(user)
         else:
             kind = "probe"
             content = "OK"

@@ -14,11 +14,13 @@ from redis.asyncio import ConnectionPool, Redis
 from app.api.v1 import (
     ai,
     auth,
+    incidents,
     integrations,
     investigations,
     resources,
     system,
     tenants,
+    tools,
     users,
 )
 from app.core.config import Settings, get_settings
@@ -74,7 +76,18 @@ def create_app(
     register_exception_handlers(app)
 
     v1 = APIRouter(prefix=API_PREFIX)
-    for module in (system, auth, tenants, users, ai, investigations, resources, integrations):
+    for module in (
+        system,
+        auth,
+        tenants,
+        users,
+        ai,
+        investigations,
+        incidents,
+        resources,
+        integrations,
+        tools,
+    ):
         v1.include_router(module.router)
     app.include_router(v1)
 

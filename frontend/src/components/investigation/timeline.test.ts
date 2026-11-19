@@ -21,6 +21,27 @@ describe("investigation timeline", () => {
     expect(collapseTimeline(events).map((e) => e.seq)).toEqual([2, 3]);
   });
 
+  it("closes tool starts one-for-one, keeping calls still running", () => {
+    const t = { task_id: "t1", tool: "linux_journal" };
+    const events = [
+      ev(1, "tool.started", t, "infrastructure_diagnostics"),
+      ev(2, "tool.started", t, "infrastructure_diagnostics"),
+      ev(3, "tool.completed", { ...t, evidence_id: "E1.1" }, "infrastructure_diagnostics"),
+      ev(4, "tool.started", { task_id: "t1", tool: "linux_top_processes" }, "infrastructure_diagnostics"),
+      ev(5, "tool.failed", { task_id: "t1", tool: "linux_top_processes" }, "infrastructure_diagnostics"),
+    ];
+    expect(collapseTimeline(events).map((e) => e.seq)).toEqual([2, 3, 5]);
+  });
+
+  it("keys steps by task so parallel agents do not hide each other", () => {
+    const events = [
+      ev(1, "agent.started", { node: "run_agent", task_id: "t1" }, "infrastructure_diagnostics"),
+      ev(2, "agent.started", { node: "run_agent", task_id: "t2" }, "infrastructure_diagnostics"),
+      ev(3, "agent.completed", { node: "run_agent", task_id: "t1" }, "infrastructure_diagnostics"),
+    ];
+    expect(collapseTimeline(events).map((e) => e.seq)).toEqual([2, 3]);
+  });
+
   it("describes events in plain language", () => {
     expect(describeEvent(ev(1, "agent.skipped", { objective: "Check disk", reason: "not yet" }, "network_diagnostics")).title).toBe(
       "Network Diagnostics skipped",

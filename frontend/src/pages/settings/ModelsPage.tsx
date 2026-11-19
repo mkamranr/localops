@@ -51,6 +51,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
     max_retries: String(model?.configuration.max_retries ?? 2),
     structured_output: model?.configuration.structured_output ?? "json_object",
     thinking: model?.configuration.thinking ?? "auto",
+    tool_calling: model?.configuration.tool_calling ?? "auto",
     api_key: "",
     clear_api_key: false,
     is_default: model?.is_default ?? false,
@@ -69,6 +70,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
           max_retries: Number(form.max_retries),
           structured_output: form.structured_output,
           thinking: form.thinking,
+          tool_calling: form.tool_calling,
         },
         is_default: form.is_default,
       };
@@ -146,6 +148,17 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
             <option value="auto">Auto: allow room for reasoning</option>
             <option value="enabled">Always thinks: larger token budget</option>
             <option value="disabled">Disable thinking where supported</option>
+          </Select>
+        </Field>
+        <Field
+          label="Tool calling"
+          htmlFor="m-tools"
+          hint="How diagnostic agents ask for read-only tools. Native uses the OpenAI tools API; JSON asks for a JSON action in the reply, for servers without tool support. Auto tries native and falls back to JSON."
+        >
+          <Select id="m-tools" value={form.tool_calling} onChange={set("tool_calling")}>
+            <option value="auto">Auto: native, falling back to JSON</option>
+            <option value="native">Native tool calls only</option>
+            <option value="json">JSON actions in the reply</option>
           </Select>
         </Field>
         <Field label="API key (optional)" htmlFor="m-key" hint={model?.has_api_key ? "A key is stored (encrypted). Leave blank to keep it." : "Stored encrypted with LOCALOPS_ENCRYPTION_KEY."}>

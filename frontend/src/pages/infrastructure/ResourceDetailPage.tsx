@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { errorMessage } from "@/api/client";
 import { resourcesApi } from "@/api/endpoints";
 import { DependencyGraphView } from "@/components/inventory/DependencyGraphView";
+import { ResourceIncidents, ResourceLogs } from "@/components/inventory/ResourceDiagnostics";
 import { ResourceDialog } from "@/components/inventory/ResourceDialog";
 import { HealthBadge, percentTone, RELATIONSHIP_META, Sparkline, TYPE_META, TypeIcon } from "@/components/inventory/shared";
 import { Button } from "@/components/ui/button";
@@ -518,11 +519,8 @@ export function ResourceDetailPage() {
       {tab === "services" && <Services resource={r} />}
       {tab === "dependencies" && <Dependencies resource={r} />}
       {tab === "history" && <History id={r.id} />}
-      {(tab === "logs" || tab === "incidents") && (
-        <div className="panel">
-          <EmptyState title={`${tab === "logs" ? "Logs" : "Incidents"} arrive in Phase 4`} description="Log collection and incident correlation are part of the diagnostics phase." />
-        </div>
-      )}
+      {tab === "logs" && <ResourceLogs resource={r} />}
+      {tab === "incidents" && <ResourceIncidents resource={r} />}
       {editing && <ResourceDialog resource={r} onClose={() => setEditing(false)} onSaved={() => void queryClient.invalidateQueries({ queryKey: ["resources", id] })} />}
     </div>
   );

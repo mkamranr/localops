@@ -415,7 +415,9 @@ async def test_investigation_uses_inventory_evidence(
     assert set(evidence) == {"payroll-api", "db-prod-01"}
     assert evidence["payroll-api"]["depends_on"] == ["db-prod-01"]
     assert evidence["db-prod-01"]["dependents"] == 1
-    assert report["root_cause"] is None
-    assert "Inventory evidence was collected for 2 resource(s)" in report["conclusion"]
+    # Inventory evidence alone never confirms a cause: the guard downgrades it.
+    assert report["root_cause"]["status"] == "probable"
+    assert report["conclusion"].startswith("Probable root cause")
     # Completed work is evidence, not a next step; skipped work remains.
-    assert report["recommended_next_steps"] == ["Network Diagnostics: Check DNS"]
+    assert "Network Diagnostics: Check DNS" in report["recommended_next_steps"]
+    assert "Discovery: Inventory" not in " ".join(report["recommended_next_steps"])

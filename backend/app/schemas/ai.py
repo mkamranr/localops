@@ -36,6 +36,9 @@ class ModelSettings(BaseModel):
     # "auto": allow for reasoning output; "enabled": the model always thinks (bigger
     # budget); "disabled": ask the server to switch reasoning off where supported.
     thinking: Literal["auto", "enabled", "disabled"] = "auto"
+    # How diagnostic agents call tools: OpenAI "tools" (native), a JSON action in the
+    # prompt (json), or native with automatic fallback to json (auto).
+    tool_calling: Literal["auto", "native", "json"] = "auto"
 
 
 class ModelEndpointCreate(BaseModel):
@@ -171,6 +174,10 @@ class InvestigationCreate(BaseModel):
     request: str = Field(min_length=3, max_length=4000)
     title: str | None = Field(None, max_length=200)
     execution_mode: ExecutionMode = "assisted"
+    # Resources to investigate regardless of what the request names (spec §10.5).
+    resource_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+    incident_id: uuid.UUID | None = None
+    investigation_type: str | None = Field(None, max_length=50)
 
     @field_validator("request")
     @classmethod
@@ -185,6 +192,29 @@ class InvestigationResume(BaseModel):
     answer: str = Field(min_length=1, max_length=2000)
 
 
+class ReportBrief(ApiModel):
+    """The headline of a completed report, for lists."""
+
+    conclusion: str | None = None
+    root_cause: str | None = None
+    root_cause_status: str | None = None
+    confidence: float | None = None
+
+    @classmethod
+    def from_result(cls, result: dict[str, Any] | None) -> ReportBrief | None:
+        if not result or not result.get("conclusion"):
+            return None
+        raw = result.get("root_cause")
+        cause: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        conf = result.get("confidence")
+        return cls(
+            conclusion=str(result["conclusion"]),
+            root_cause=cause.get("statement"),
+            root_cause_status=cause.get("status"),
+            confidence=float(conf) if isinstance(conf, int | float) else None,
+        )
+
+
 class InvestigationOut(ApiModel):
     id: uuid.UUID
     title: str
@@ -194,6 +224,8 @@ class InvestigationOut(ApiModel):
     request_type: str | None
     workflow_id: str
     user_id: uuid.UUID
+    incident_id: uuid.UUID | None = None
+    investigation_type: str | None = None
     pending_question: str | None
     error: str | None
     cancel_requested: bool
@@ -201,6 +233,7 @@ class InvestigationOut(ApiModel):
     started_at: datetime
     completed_at: datetime | None
     updated_at: datetime | None
+    report: ReportBrief | None = None
 
 
 class InvestigationDetail(InvestigationOut):

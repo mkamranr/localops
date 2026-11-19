@@ -43,7 +43,7 @@ export const NAVIGATION: NavGroup[] = [
     label: "Operations",
     items: [
       { label: "Investigations", path: "/investigations", icon: Search, permission: "incident.read" },
-      { label: "Incidents", path: "/incidents", icon: ShieldAlert, permission: "incident.read", phase: 4 },
+      { label: "Incidents", path: "/incidents", icon: ShieldAlert, permission: "incident.read" },
       { label: "Approvals", path: "/approvals", icon: ClipboardCheck, permission: "approval.read", phase: 5 },
     ],
   },
@@ -65,7 +65,7 @@ export const NAVIGATION: NavGroup[] = [
   {
     label: "Governance",
     items: [
-      { label: "Reports", path: "/reports", icon: FileBarChart, permission: "incident.read", phase: 4 },
+      { label: "Reports", path: "/reports", icon: FileBarChart, permission: "incident.read" },
       { label: "Audit Logs", path: "/audit", icon: ScrollText, permission: "audit.read" },
       { label: "Settings", path: "/settings", icon: Settings },
     ],

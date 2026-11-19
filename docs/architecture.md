@@ -1,4 +1,4 @@
-# Architecture (Phase 3)
+# Architecture (Phase 4)
 
 LocalOps is a **modular monolith** (spec §25.1): one FastAPI backend image runs as `api`,
 `worker` and the one-shot `migrate`. A static React bundle is served behind an nginx reverse proxy.
@@ -31,14 +31,18 @@ backend/app/
 │                      errors (JSON envelope), logging (structlog JSON), middleware, redis keys
 ├── database/          engine + tenant_session() (sets RLS context per transaction)
 ├── models/            SQLAlchemy 2 models: identity, audit, ai (models/agents/investigations)
-├── llm/               model gateway (OpenAI-compatible, structured output, metrics)
-├── agents/            agent catalogue, Supervisor prompts/schemas, Discovery agent
+├── llm/               model gateway (OpenAI-compatible, structured output, tool calling)
+├── agents/            agent catalogue, Supervisor, Discovery, diagnostics tool loop,
+│                      assessments (knowledge, triage, change impact), RCA with guards
+├── tools/             read-only diagnostic tool catalogue (Linux, Windows, Docker, network,
+│                      inventory), executor (budget, per-host limit, audit), redaction
 ├── integrations/      collectors: linux (SSH), windows (WinRM), docker (SSH/TLS), http;
 │                      pure parsers + transports; SSH host-key pinning
 ├── discovery/         engine (upsert, diff, health, stale, relationships), scheduler
 ├── graphs/            LangGraph investigation graph, runtime, runner, checkpointer, events
 ├── repositories/      query functions (always under RLS)
-├── services/          business logic: auth, tenants, users/roles, audit, dashboard, health
+├── services/          business logic: auth, tenants, users/roles, audit, dashboard, health,
+│                      incidents (status machine, automatic incidents), knowledge search
 ├── schemas/           Pydantic request/response models
 └── api/               dependencies (get_context, require_permission) and v1 routers
 ```
@@ -77,6 +81,25 @@ Revision `0003` adds the inventory: `integrations`, `resources`, `resource_relat
 RLS. It also adds the SECURITY DEFINER function `worker_due_integrations()`, which the scheduler
 uses to find due work across tenants.
 
+Revision `0004` adds:
+
+- `incidents` (per-tenant numbers `INC-0001`, a status machine, a de-duplication key, a
+  full-text search vector);
+- `incident_resources`, and `incident_events` (an append-only timeline);
+- `tool_executions` (every diagnostic tool run, with redacted output);
+- `investigations.incident_id`.
+
+All of these are under RLS. Incident numbers are allocated under a transaction-scoped advisory
+lock.
+
+### Investigations and incidents
+
+```
+discovery / health check ─► resource turns unhealthy ─► incident (source=discovery, dedup per resource)
+incident ─► Investigate ─► investigation (incident's resources) ─► diagnostics agents ─► tools
+        ◄── root cause + summary written back, timeline events ◄── RCA report
+```
+
 ### Discovery
 
 ```
@@ -103,13 +126,24 @@ system fonts only and runs fully offline.
   tagged with their delivery phase.
 - `src/api/sse.ts`: fetch-based Server-Sent Events client (Authorization header, `Last-Event-ID`
   resume, backoff); `src/hooks/useInvestigationStream.ts` feeds the live timeline.
-- Pages: Login, Dashboard, AI Assistant, Investigations (list + workspace), Infrastructure
-  (list + resource detail), Dependencies (cytoscape.js topology, loaded on demand), Tools &
-  Integrations, Agents, Audit Logs, Settings (Account, Users, Roles, AI Models, Tenants), plus
-  "planned" placeholders for screens arriving in later phases.
+- Pages:
+  - Login, Dashboard, AI Assistant;
+  - Investigations (list, plus a workspace with live tool calls and the RCA report);
+  - Incidents (list, plus detail with Overview, Investigation, Timeline, Diagnostics, RCA,
+    Remediation, Related and Audit tabs);
+  - Reports (printable RCA reports with a Markdown download);
+  - Infrastructure (list, plus resource detail with live Logs and Incidents tabs);
+  - Dependencies (cytoscape.js topology), Tools & Integrations, Agents, Audit Logs;
+  - Settings (Account, Users, Roles, AI Models, Tenants).
 
-## Planned next (Phase 4)
+  The heavier pages are loaded on demand. Screens arriving in later phases have "planned"
+  placeholders.
 
-Diagnostic agents (incident triage, infrastructure, application and network diagnostics, root
-cause analysis, change impact), log and metric collection tools, and incidents. Further
-integrations (SNMP, Kubernetes, VMware, Proxmox, monitoring systems) follow in later phases.
+## Planned next (Phase 5)
+
+- The approval workflow, the policy engine and the execution gateway;
+- remediation planning, with state-changing tools behind approvals;
+- rollback and verification.
+
+Further integrations (SNMP, Kubernetes, VMware, Proxmox, monitoring systems), runbooks and
+vector search follow in later phases.

@@ -25,13 +25,19 @@ import { TenantsPage } from "@/pages/settings/TenantsPage";
 import { UsersPage } from "@/pages/settings/UsersPage";
 import { useAuthStore } from "@/stores/authStore";
 
-// The graph library is large; load the pages that draw graphs on demand.
+// Load the heavier pages (graphs, incidents, reports) on demand.
 const DependenciesPage = lazy(() =>
   import("@/pages/infrastructure/DependenciesPage").then((m) => ({ default: m.DependenciesPage })),
 );
 const ResourceDetailPage = lazy(() =>
   import("@/pages/infrastructure/ResourceDetailPage").then((m) => ({ default: m.ResourceDetailPage })),
 );
+const IncidentsPage = lazy(() => import("@/pages/incidents/IncidentsPage").then((m) => ({ default: m.IncidentsPage })));
+const IncidentDetailPage = lazy(() =>
+  import("@/pages/incidents/IncidentDetailPage").then((m) => ({ default: m.IncidentDetailPage })),
+);
+const ReportsPage = lazy(() => import("@/pages/reports/ReportsPage").then((m) => ({ default: m.ReportsPage })));
+const ReportDetailPage = lazy(() => import("@/pages/reports/ReportsPage").then((m) => ({ default: m.ReportDetailPage })));
 const lazyPage = (node: ReactNode) => <Suspense fallback={<Spinner />}>{node}</Suspense>;
 
 const queryClient = new QueryClient({
@@ -133,6 +139,10 @@ export function AppRoutes() {
             </RequirePermission>
           }
         />
+        <Route path="incidents" element={<RequirePermission permission="incident.read">{lazyPage(<IncidentsPage />)}</RequirePermission>} />
+        <Route path="incidents/:id" element={<RequirePermission permission="incident.read">{lazyPage(<IncidentDetailPage />)}</RequirePermission>} />
+        <Route path="reports" element={<RequirePermission permission="incident.read">{lazyPage(<ReportsPage />)}</RequirePermission>} />
+        <Route path="reports/:id" element={<RequirePermission permission="incident.read">{lazyPage(<ReportDetailPage />)}</RequirePermission>} />
         <Route
           path="agents"
           element={

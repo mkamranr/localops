@@ -11,8 +11,10 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.agents.catalogue import CATALOGUE, SPECIALIST_TYPES
+from app.agents.catalogue import CATALOGUE, SPECIALIST_TYPES, AgentSpec
+from app.agents.diagnostics import COVERAGE, TOOL_LOOP_AGENTS
 from app.llm.gateway import ChatMessage
+from app.tools.registry import AGENT_TOOLS
 
 RequestType = Literal[
     "incident_investigation",
@@ -192,7 +194,22 @@ PLAN_EXAMPLE: dict[str, Any] = {
 }
 
 
-_AGENT_LINES = "\n".join(f"- {a.agent_type}: {a.description}" for a in CATALOGUE if a.specialist)
+# Agents a plan may name. Root cause analysis always runs after the specialists, so it
+# is not planned.
+PLANNABLE: tuple[str, ...] = tuple(t for t in SPECIALIST_TYPES if t != "root_cause_analysis")
+
+
+def _agent_line(a: AgentSpec) -> str:
+    line = f"- {a.agent_type}: {a.description}"
+    tools = AGENT_TOOLS.get(a.agent_type)
+    if tools and a.agent_type in TOOL_LOOP_AGENTS:
+        line += f" Tools: {', '.join(tools)}."
+    if not a.implemented:
+        line += f" (not available until phase {a.available_in_phase})"
+    return line
+
+
+_AGENT_LINES = "\n".join(_agent_line(a) for a in CATALOGUE if a.agent_type in PLANNABLE)
 
 CLASSIFY_SYSTEM = """You are the Supervisor of LocalOps, an infrastructure operations \
 assistant running inside a private, air-gapped data centre.
@@ -214,6 +231,11 @@ Rules:
 - Choose between 1 and 5 tasks; each task names exactly one agent from the list above.
 - When affected entities were resolved in the inventory, include one discovery task to \
 collect their inventory evidence (health, facts, dependencies).
+- Use the diagnostics agents to gather live evidence: infrastructure_diagnostics for \
+hosts, application_diagnostics for containers and HTTP services, network_diagnostics for \
+connectivity or DNS symptoms. Add knowledge to look for similar past incidents.
+- Use change_impact for questions about the effect of a planned change.
+- Root cause analysis runs automatically after the specialists; do not plan it.
 - Each objective must be concrete and checkable (what to inspect and why).
 - Do not propose remediation actions unless the request explicitly asks for a fix; even \
 then, use remediation_planner only to *plan*.
@@ -261,7 +283,7 @@ def sanitise_plan(plan: TaskPlan, *, limit: int = 5) -> list[PlannedTask]:
     for task in plan.tasks:
         agent = task.agent.strip().lower().replace(" ", "_").replace("-", "_")
         agent = agent.removesuffix("_agent")
-        if agent not in SPECIALIST_TYPES or not task.objective:
+        if agent not in PLANNABLE or not task.objective:
             continue
         key = (agent, task.objective.lower())
         if key in seen:
@@ -270,4 +292,63 @@ def sanitise_plan(plan: TaskPlan, *, limit: int = 5) -> list[PlannedTask]:
         out.append(PlannedTask(agent=agent, objective=task.objective, rationale=task.rationale))
         if len(out) >= limit:
             break
+    return out
+
+
+def ensure_coverage(
+    tasks: list[PlannedTask],
+    resources: list[dict[str, object]],
+    request_type: str,
+    *,
+    triage: bool = False,
+    limit: int = 7,
+) -> list[PlannedTask]:
+    """Add the tasks an investigation needs even if the model's plan forgot them.
+
+    Resolved resources get discovery plus the matching diagnostics agent; incident
+    investigations get a knowledge search; change questions get change impact.
+    """
+    out = list(tasks)
+    have = {t.agent for t in out}
+    resolved = [r for r in resources if r.get("resolved")]
+
+    def add(agent: str, objective: str, rationale: str) -> None:
+        if agent not in have and len(out) < limit:
+            out.append(PlannedTask(agent=agent, objective=objective, rationale=rationale))
+            have.add(agent)
+
+    if triage:
+        add(
+            "incident_triage",
+            "Assess severity and priority of the incident",
+            "The investigation was started from an incident",
+        )
+    if resolved:
+        add(
+            "discovery",
+            "Collect inventory evidence for the affected resources",
+            "Health, facts and dependencies from the inventory",
+        )
+    if request_type == "change_impact":
+        add(
+            "change_impact",
+            "Assess dependents, active incidents and risk of the proposed change",
+            "Change questions need a blast-radius assessment",
+        )
+        return out
+    if request_type in ("incident_investigation", "health_check", "remediation_request"):
+        for r in resolved:
+            agent = COVERAGE.get(str(r.get("resource_type")))
+            if agent:
+                add(
+                    agent,
+                    f"Collect live diagnostics for {r.get('name')} related to the symptoms",
+                    f"No {agent.replace('_', ' ')} task covered {r.get('name')}",
+                )
+        if request_type != "health_check":
+            add(
+                "knowledge",
+                "Search for similar past incidents and investigations",
+                "Earlier causes and resolutions can guide this investigation",
+            )
     return out

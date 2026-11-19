@@ -118,6 +118,7 @@ export interface ModelSettings {
   structured_output?: "json_schema" | "json_object" | "none";
   context_window?: number | null;
   thinking?: "auto" | "enabled" | "disabled";
+  tool_calling?: "auto" | "native" | "json";
 }
 
 export interface ModelEndpoint {
@@ -216,6 +217,8 @@ export interface Investigation {
   request_type: string | null;
   workflow_id: string;
   user_id: string;
+  incident_id: string | null;
+  investigation_type: string | null;
   pending_question: string | null;
   error: string | null;
   cancel_requested: boolean;
@@ -223,6 +226,14 @@ export interface Investigation {
   started_at: string;
   completed_at: string | null;
   updated_at: string | null;
+  report?: ReportBrief | null;
+}
+
+export interface ReportBrief {
+  conclusion: string | null;
+  root_cause: string | null;
+  root_cause_status: RootCause["status"] | null;
+  confidence: number | null;
 }
 
 export interface ReportTask {
@@ -232,6 +243,64 @@ export interface ReportTask {
   rationale: string;
   status: string;
   reason: string | null;
+  summary?: string | null;
+  notes?: string[];
+}
+
+export type FindingKind = "confirmed_fact" | "observation" | "hypothesis";
+export type Likelihood = "high" | "medium" | "low";
+
+export interface Finding {
+  agent: string;
+  kind: FindingKind;
+  statement: string;
+  evidence_ids: string[];
+  likelihood?: Likelihood;
+}
+
+export interface RootCause {
+  statement: string;
+  status: "confirmed" | "probable" | "unverified";
+  confidence: number;
+  evidence_ids: string[];
+}
+
+export interface Remediation {
+  action: string;
+  rationale: string;
+  risk: "low" | "medium" | "high";
+  evidence_ids: string[];
+}
+
+export interface ChangeImpact {
+  resource_id: string;
+  resource: string;
+  environment: string | null;
+  owner: string | null;
+  direct: string[];
+  indirect: string[];
+  production_dependents: string[];
+  unhealthy_dependents: string[];
+  active_incidents: string[];
+  previous_incidents: number;
+  risk_level: string;
+  potential_disruption: string;
+  precautions: string[];
+  required_approvals: string[];
+}
+
+export interface SimilarItem {
+  kind: "incident" | "investigation";
+  id: string;
+  number?: string | null;
+  title: string;
+  status: string;
+  severity?: string | null;
+  root_cause?: string | null;
+  resolution?: string | null;
+  conclusion?: string | null;
+  created_at: string;
+  score: number;
 }
 
 export interface InvestigationReport {
@@ -258,9 +327,27 @@ export interface InvestigationReport {
   tasks: ReportTask[];
   evidence: EvidenceItem[];
   evidence_sufficient: boolean;
-  root_cause: string | null;
+  root_cause: RootCause | null;
   conclusion: string;
   recommended_next_steps: string[];
+  // Phase 4 RCA sections (spec §6.6)
+  incident_summary: string;
+  timeline: { at: string | null; agent: string; evidence_id: string; summary: string }[];
+  findings: Finding[];
+  recent_changes: { evidence_id: string; resource: string | null; summary: string }[];
+  dependency_analysis: { resource: string; depends_on: string[]; dependents: number; evidence_id: string }[];
+  change_impact: { impacts: ChangeImpact[]; risk_level: string } | null;
+  contributing_factors: { statement: string; evidence_ids: string[] }[];
+  alternative_hypotheses: { statement: string; likelihood: Likelihood; evidence_ids: string[] }[];
+  confidence: number | null;
+  confidence_label: string;
+  impact: string;
+  recommended_remediation: Remediation[];
+  preventive_recommendations: string[];
+  evidence_gaps: string[];
+  triage: { severity: string; priority: string; reasons: string[]; investigation_paths: string[] } | null;
+  similar_incidents: SimilarItem[];
+  similar_investigations: SimilarItem[];
 }
 
 export interface InvestigationDetail extends Investigation {
@@ -506,10 +593,19 @@ export interface InventoryFacets {
 }
 
 export interface EvidenceItem {
+  id?: string;
   source: string;
   agent: string;
-  resource_id?: string;
-  resource: string;
+  tool?: string;
+  excerpt?: string;
+  ok?: boolean;
+  arguments?: Record<string, unknown>;
+  execution_id?: string | null;
+  duration_ms?: number;
+  baseline?: boolean;
+  ref?: { kind: string; id: string; number?: string | null };
+  resource_id?: string | null;
+  resource: string | null;
   resource_type?: ResourceType;
   summary: string;
   findings?: string[];
@@ -517,4 +613,137 @@ export interface EvidenceItem {
   dependents?: number;
   health?: HealthStatus;
   observed_at?: string;
+}
+
+// ------------------------------------------------------------------ Incidents (Phase 4)
+
+export type Severity = "critical" | "high" | "medium" | "low" | "informational";
+export type Priority = "P1" | "P2" | "P3" | "P4";
+export type IncidentStatus =
+  | "new"
+  | "investigating"
+  | "awaiting_approval"
+  | "remediating"
+  | "monitoring"
+  | "resolved"
+  | "closed"
+  | "failed";
+export type IncidentSource = "manual" | "investigation" | "discovery";
+
+export interface IncidentResource {
+  id: string;
+  name: string;
+  resource_type: ResourceType;
+  health_status: HealthStatus;
+  environment: string | null;
+}
+
+export interface Incident {
+  id: string;
+  number: number;
+  key: string;
+  title: string;
+  description: string;
+  severity: Severity;
+  priority: Priority;
+  status: IncidentStatus;
+  source: IncidentSource;
+  assigned_to: string | null;
+  assigned_username: string | null;
+  created_by: string | null;
+  root_cause: Partial<RootCause> & {
+    investigation_id?: string;
+    contributing_factors?: { statement: string; evidence_ids: string[] }[];
+    recommended_remediation?: Remediation[];
+  };
+  investigation_summary: string | null;
+  resolution: string | null;
+  created_at: string;
+  updated_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+  resources: IncidentResource[];
+}
+
+export interface IncidentDetail extends Incident {
+  investigations: {
+    id: string;
+    title: string;
+    status: InvestigationStatus;
+    started_at: string;
+    completed_at: string | null;
+    conclusion: string | null;
+  }[];
+  allowed_transitions: IncidentStatus[];
+}
+
+export interface IncidentEvent {
+  id: string;
+  event_type: string;
+  summary: string;
+  details: Record<string, unknown>;
+  actor: string | null;
+  created_at: string;
+}
+
+export interface IncidentStats {
+  open: number;
+  by_status: Partial<Record<IncidentStatus, number>>;
+  by_severity_open: Partial<Record<Severity, number>>;
+  resolved_last_7d: number;
+  mean_time_to_resolve_minutes: number | null;
+}
+
+export interface IncidentInput {
+  title: string;
+  description?: string;
+  severity?: Severity;
+  priority?: Priority;
+  resource_ids?: string[];
+  assigned_to?: string | null;
+  investigation_id?: string;
+}
+
+export interface ToolExecution {
+  id: string;
+  investigation_id: string | null;
+  resource_id: string | null;
+  resource_name: string | null;
+  agent_type: string | null;
+  actor: string | null;
+  evidence_id: string | null;
+  tool: string;
+  arguments: Record<string, unknown>;
+  status: "success" | "failed" | "rejected";
+  duration_ms: number | null;
+  output: string | null;
+  summary: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface ToolInfo {
+  name: string;
+  description: string;
+  category: string;
+  risk_level: string;
+  requires_approval: boolean;
+  remote: boolean;
+  timeout_seconds: number;
+  resource_types: ResourceType[];
+  input_schema: {
+    properties?: Record<string, { type?: string; description?: string; enum?: string[]; default?: unknown; minimum?: number; maximum?: number }>;
+    required?: string[];
+  };
+}
+
+export interface ToolRunResult {
+  tool: string;
+  status: "success" | "failed" | "rejected";
+  summary: string;
+  output: string;
+  error: string | null;
+  duration_ms: number;
+  execution_id: string | null;
+  resource_name: string | null;
 }

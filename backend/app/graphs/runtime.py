@@ -13,11 +13,12 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.catalogue import AgentSpec, get_spec, merged_config
 from app.core.config import Settings
@@ -25,7 +26,13 @@ from app.core.crypto import decrypt_secret
 from app.database.session import tenant_session
 from app.graphs import events
 from app.llm.gateway import ChatMessage, EndpointConfig, ModelClient, ModelError, Usage
-from app.models import Agent, AgentExecution, Investigation, ModelEndpoint
+from app.models import Agent, AgentExecution, Investigation, ModelEndpoint, ToolExecution
+
+if TYPE_CHECKING:  # the tool stack imports services that import the dispatcher
+    from app.agents.toolloop import ToolBudget
+    from app.llm.tool_calling import ToolExchange, ToolTurn
+    from app.tools.base import ToolSpec
+    from app.tools.executor import ToolRunResult
 
 
 class InvestigationCancelledError(Exception):
@@ -65,6 +72,7 @@ class InvestigationRuntime:
     redis: Redis | None = None
     client_factory: ClientFactory = ModelClient
     on_event: Callable[[str], Awaitable[None]] | None = None
+    _budget: ToolBudget | None = None
 
     # ------------------------------------------------------------------ events
 
@@ -196,6 +204,99 @@ class InvestigationRuntime:
             raise
         call.usage.add(result.usage)
         return result.value
+
+    # ----------------------------------------------------------------- tools
+
+    async def chat_tools(
+        self,
+        call: NodeCall,
+        binding: AgentBinding,
+        messages: list[ChatMessage],
+        tools: list[dict[str, Any]],
+        history: list[ToolExchange],
+    ) -> ToolTurn:
+        if binding.endpoint is None:
+            raise AgentUnavailableError(
+                "No AI model is configured. Add one under Settings → AI Models and mark it "
+                "as default, or assign a model to the agent."
+            )
+        from app.llm.tool_calling import chat_tools
+
+        client = self.client_factory(binding.endpoint)
+        call.model_name = binding.endpoint.model
+        call.endpoint_id = binding.endpoint_id
+        try:
+            turn = await chat_tools(
+                client,
+                messages,
+                tools,
+                history,
+                temperature=float(binding.config["temperature"]),
+                max_tokens=int(binding.config["max_tokens"]),
+            )
+        except ModelError:
+            call.usage.calls += 1
+            raise
+        call.usage.add(turn.usage)
+        return turn
+
+    async def tool_budget(self) -> ToolBudget:
+        """The investigation's remaining tool calls, shared by all its agents.
+
+        Counted from recorded executions, so a resumed run does not get a fresh budget.
+        """
+        from app.agents.toolloop import ToolBudget
+
+        if self._budget is None:
+            async with tenant_session(self.tenant_id) as session:
+                used = await session.scalar(
+                    select(func.count())
+                    .select_from(ToolExecution)
+                    .where(
+                        ToolExecution.investigation_id == self.investigation_id,
+                        ToolExecution.status != "rejected",
+                    )
+                )
+            self._budget = ToolBudget(
+                max(self.settings.investigation_max_tool_calls - int(used or 0), 0)
+            )
+        return self._budget
+
+    async def run_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        evidence_id: str,
+        *,
+        agent_type: str,
+        allowed: list[ToolSpec],
+        allow_remote: bool,
+    ) -> ToolRunResult:
+        from app.tools.executor import run_tool
+
+        return await run_tool(
+            self.settings,
+            self.tenant_id,
+            name,
+            arguments,
+            allow_remote=allow_remote,
+            allowed=allowed,
+            investigation_id=self.investigation_id,
+            agent_type=agent_type,
+            actor=f"agent:{agent_type}",
+            evidence_id=evidence_id,
+        )
+
+    async def in_session[T](self, fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
+        """Run ``fn`` in a short tenant-bound transaction."""
+        async with tenant_session(self.tenant_id) as session:
+            return await fn(session)
+
+    async def resources_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        from app.agents import discovery
+
+        async with tenant_session(self.tenant_id) as session:
+            return await discovery.resolve_ids(session, ids)
 
     # ------------------------------------------------------------ executions
 

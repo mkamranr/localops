@@ -544,3 +544,10 @@ async def environments_and_groups(session: AsyncSession) -> dict[str, list[str]]
         "groups": sorted(g for g in groups if g),
         "tags": sorted(t for t in tags if t)[:200],
     }
+
+
+async def dependents_by_depth(
+    session: AsyncSession, resource_id: uuid.UUID, depth: int = 6
+) -> dict[uuid.UUID, int]:
+    """Resources that depend on ``resource_id`` (directly or not), with their distance."""
+    return await _walk(session, resource_id, depth, True)

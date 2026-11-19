@@ -36,6 +36,8 @@ from app.graphs.runtime import (
 )
 from app.llm.gateway import ModelClient, ModelError
 from app.models import TERMINAL_STATUSES, Investigation
+from app.repositories.identity import user_permissions
+from app.services import incident_service
 
 # Air-gapped: never let LangChain/LangGraph attempt to reach LangSmith.
 os.environ.setdefault("LANGSMITH_TRACING", "false")
@@ -138,6 +140,12 @@ async def _run(rt: InvestigationRuntime, settings: Settings, resume: str | None)
             return inv.status
         cancel_requested = inv.cancel_requested
         request, mode, attempts = inv.request, inv.execution_mode, inv.attempts
+        context = {
+            "explicit_resource_ids": list(inv.resource_ids or []),
+            "incident_id": str(inv.incident_id) if inv.incident_id else None,
+            # Remote diagnostics run with the requester's authority.
+            "allow_remote": "tool.execute.readonly" in await user_permissions(session, inv.user_id),
+        }
 
     if cancel_requested:
         await _cancelled(rt)
@@ -172,7 +180,7 @@ async def _run(rt: InvestigationRuntime, settings: Settings, resume: str | None)
             elif snapshot.values.get("report"):
                 graph_input = None  # finished, but the status update was lost
             else:
-                graph_input = {"request": request, "execution_mode": mode}
+                graph_input = {"request": request, "execution_mode": mode, **context}
 
             if graph_input is not None or snapshot.next:
                 async with asyncio.timeout(settings.investigation_timeout_seconds):
@@ -197,6 +205,9 @@ async def _run(rt: InvestigationRuntime, settings: Settings, resume: str | None)
                 r["resource_id"] for r in values.get("resources", []) if r.get("resolved")
             ],
             completed_at=datetime.now(UTC),
+        )
+        await incident_service.record_investigation_result(
+            rt.tenant_id, rt.investigation_id, report, redis=rt.redis
         )
         return "completed"
     except InvestigationCancelledError:
@@ -246,4 +257,8 @@ async def _failed(rt: InvestigationRuntime, message: str, *, detail: str | None 
         error=full[:1000],
         completed_at=datetime.now(UTC),
     )
+    with contextlib.suppress(Exception):
+        await incident_service.record_investigation_result(
+            rt.tenant_id, rt.investigation_id, None, error=message
+        )
     return "failed"

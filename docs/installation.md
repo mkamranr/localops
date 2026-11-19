@@ -1,12 +1,14 @@
-# Installation (Phase 3)
+# Installation (Phase 4)
 
 ## Requirements
 
 - Linux x86_64 host with Docker Engine 24+ and the Compose v2 plugin.
 - 2 vCPU / 4 GB RAM is enough for the LocalOps stack itself (no GPU required).
 - A self-hosted, OpenAI-compatible model server reachable from the host: Ollama, vLLM,
-  llama.cpp `server` or similar. It can run on another machine (for example a GPU node). A
-  7–14B instruction-tuned model with JSON output support works well (e.g. Qwen2.5-14B-Instruct).
+  llama.cpp `server` or similar. It can run on another machine (for example a GPU node).
+  Diagnostics agents choose tools through **tool calling**, so use an instruction-tuned model
+  that calls tools reliably: Qwen2.5/Qwen3 14B or larger works well. Smaller models can
+  classify and plan, but tend to call tools badly.
 - One free TCP port for the web UI (default `8300`).
 
 Air-gapped bundles (pre-exported images, checksums, SBOM) are delivered in Phase 7. Until then,
@@ -89,10 +91,25 @@ Use the model name exactly as the server lists it (e.g. `qwen2.5:14b-instruct` f
 that yours is among them, and runs a one-token probe. If your server rejects
 `response_format`, set **JSON mode** to *prompt only*.
 
-Then open **AI Assistant** and describe a problem. The Supervisor classifies it, may ask a
-clarifying question, plans the investigation and streams progress live. Entities it names are
-checked against the inventory (section 5), and the Discovery agent adds what the inventory knows
-about them as evidence. Log, metric and root-cause agents arrive in Phase 4.
+**Tool calling** decides how agents request diagnostic tools:
+
+| Setting | Use when |
+|---|---|
+| Auto (default) | Most servers. Uses the OpenAI `tools` API, and falls back to JSON if the server rejects it |
+| Native | The server supports `tools` and you want errors rather than a fallback. For vLLM, start it with `--enable-auto-tool-choice --tool-call-parser hermes` (Qwen); Ollama and llama.cpp (`--jinja`) support tools for models whose template has them |
+| JSON | The server has no tool support. Agents answer with a JSON action instead |
+
+Then open **AI Assistant** and describe a problem, for example *"Why is CPU high on web-01?"*.
+
+1. The Supervisor classifies the request, may ask a clarifying question, and plans the
+   investigation, streaming progress live.
+2. Entities it names are checked against the inventory (section 5).
+3. The diagnostics agents run read-only tools on the matched resources: system snapshot,
+   processes, journal or event log, container state and logs, HTTP checks.
+4. The Root Cause Analysis agent writes a report in which every claim cites that evidence.
+
+Remote tools need the `tool.execute.readonly` permission (Operator and above). Without it,
+agents use inventory data only.
 
 ## 5. Add infrastructure
 
@@ -113,6 +130,10 @@ command field. Use a dedicated, least-privileged account.
 
 - Create a plain user (for example `localops`) with no sudo rights. Every collected fact is
   readable without root: `/etc/os-release`, `/proc`, `df`, `ip`, `ss`, `systemctl`.
+- For the diagnostics agents and the **Logs** tab to read the systemd journal, add the user to
+  the `systemd-journal` group (or `adm` on some distributions):
+  `sudo usermod -aG systemd-journal localops`. Without it, `journalctl` returns only that
+  user's own messages.
 - Authenticate with a private key (recommended; OpenSSH or PEM, optionally with a passphrase)
   or a password.
 - **Host keys are pinned on first use.** The first successful connection stores the server's key
@@ -131,6 +152,8 @@ command field. Use a dedicated, least-privileged account.
 - Use a domain or local account that is a member of **Remote Management Users**. For a
   non-administrator account, also grant *Enable Account* and *Remote Enable* on the WMI
   namespace `root\cimv2` (`wmimgmt.msc`).
+- To read the System and Application event logs (diagnostics and the **Logs** tab), also add
+  the account to **Event Log Readers**.
 - Authentication: NTLM (default), or Basic over HTTPS only. Kerberos is not included.
 - Facts collected: OS and build, domain, uptime, CPU and memory use, fixed disks, running
   services, stopped automatic services, IPv4 addresses, listening TCP ports, and established
@@ -165,7 +188,28 @@ is degraded and ≥ 97 % unhealthy; memory ≥ 95 % and load per CPU ≥ 2 are d
 services are degraded; an unreachable host, or a container that exited with an error or is
 unhealthy, is unhealthy.
 
-## 6. Run the test suite (optional)
+## 6. Incidents
+
+- **Automatic incidents:** when discovery or a health check finds a resource *unhealthy*,
+  LocalOps opens an incident for it, one open incident per resource. Recovery is added to the
+  incident's timeline, but the incident is not closed automatically. Set
+  `INCIDENT_AUTO_CREATE=false` to turn this off.
+- **Investigate:** press **Investigate** on an incident to start an investigation on its
+  resources. The root cause and summary are written back to the incident when the
+  investigation completes. Completed investigations also appear under **Reports**, where they
+  can be printed or downloaded as Markdown.
+- **Execution:** remediation is advisory in Phase 4. Executing it, with approvals, rollback and
+  verification, arrives in Phase 5.
+
+Related settings in `.env`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `INVESTIGATION_MAX_TOOL_CALLS` | 30 | Diagnostic tool runs allowed per investigation |
+| `TOOL_OUTPUT_MODEL_BYTES` | 6000 | Redacted tool output a model sees per run |
+| `INCIDENT_AUTO_CREATE` | true | Open incidents for resources that turn unhealthy |
+
+## 7. Run the test suite (optional)
 
 ```bash
 docker compose -f docker-compose.test.yml run --rm --build tests
@@ -179,6 +223,9 @@ docker compose -f docker-compose.test.yml down -v
 | Logs | `docker compose logs -f api worker` |
 | Investigations stuck in "Queued" | Check the worker: `docker compose ps worker` and `docker compose logs worker` |
 | Discovery runs stay "queued" | Same: discovery and scheduled runs execute in the worker |
+| Diagnostics report "journal" results with only a few lines | The SSH user is not in `systemd-journal` / `adm` |
+| Windows event-log tools fail with access denied | Add the account to **Event Log Readers** |
+| Agents never call tools, or the task shows "failed" with a model error | Use a tool-capable model, or set **Tool calling** to *JSON* for that model |
 | A target fails with `host_key_changed` | The SSH host key differs from the pinned one. Verify it out of band, then **Reset pin** on the integration |
 | Upgrade | `git pull && docker compose up -d --build` (migrations run automatically) |
 | Stop | `docker compose down` (data volumes are kept) |

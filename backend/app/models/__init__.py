@@ -20,6 +20,14 @@ from app.models.identity import (
     User,
     UserRole,
 )
+from app.models.incidents import (
+    OPEN_STATUSES,
+    Incident,
+    IncidentEvent,
+    IncidentResource,
+    ToolExecution,
+    incident_key,
+)
 from app.models.inventory import (
     DiscoveryRun,
     Integration,
@@ -32,12 +40,16 @@ from app.models.inventory import (
 
 __all__ = [
     "ACTIVE_STATUSES",
+    "OPEN_STATUSES",
     "SYSTEM_TENANT_SLUG",
     "TERMINAL_STATUSES",
     "Agent",
     "AgentExecution",
     "AuditLog",
     "DiscoveryRun",
+    "Incident",
+    "IncidentEvent",
+    "IncidentResource",
     "Integration",
     "Investigation",
     "InvestigationEvent",
@@ -52,6 +64,8 @@ __all__ = [
     "RolePermission",
     "SshHostKey",
     "Tenant",
+    "ToolExecution",
     "User",
     "UserRole",
+    "incident_key",
 ]
