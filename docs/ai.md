@@ -27,8 +27,12 @@ downloads and no telemetry.
 
 - **Endpoint normalisation.** `http://host:11434` and `http://host:8000/v1` both work. Ollama
   health uses `/api/tags`; other providers use `/v1/models`.
-- **Resilience.** Per-endpoint timeout. Retries with exponential backoff on connection errors, 429
-  and 5xx. 4xx errors are not retried.
+- **Resilience.** Completions are streamed. The per-endpoint timeout limits how long the model
+  may go *silent*, not the total generation time, so slow and thinking models can finish. The
+  investigation as a whole is limited by `INVESTIGATION_TIMEOUT_SECONDS`. Retries with exponential
+  backoff on connection errors, 429 and 5xx. Read timeouts and 4xx errors are not retried.
+  Servers that reply with a plain JSON body instead of a stream also work. Optional fields
+  (`stream_options`, thinking switches) are dropped once if the server rejects them with HTTP 400.
 - **Structured output.** Requests a JSON object (`json_object`, `json_schema` or prompt-only, per
   endpoint). The prompt gives a plain field list and an example rather than a raw JSON Schema.
   Reasoning (`<think>…</think>`, a lone `</think>`, or a separate `reasoning_content` field) and

@@ -344,62 +344,66 @@ class ModelClient:
         response_format: dict[str, Any] | None = None,
         request_timeout: float | None = None,
     ) -> ChatResult:
+        """One chat completion.
+
+        Responses are streamed, so the endpoint timeout bounds the *silence* between
+        tokens rather than the whole generation: slow or thinking models keep going as
+        long as they produce output. (The investigation has its own overall limit.)
+        Servers that answer with a plain JSON body are handled too.
+        """
         ep = self.endpoint
         payload: dict[str, Any] = {
             "model": ep.model,
             "messages": normalise_messages(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "stream": False,
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if response_format:
             payload["response_format"] = response_format
-        extras = _thinking_extras(ep)
-        payload.update(extras)
+        payload.update(_thinking_extras(ep))
+        # Fields some strict servers reject; dropped (once) on HTTP 400.
+        optional = [k for k in ("stream_options", *_thinking_extras(ep)) if k in payload]
+        idle = request_timeout or ep.timeout_seconds
 
         attempts = ep.max_retries + 1
         last_error: ModelError | None = None
         for attempt in range(1, attempts + 1):
             start = time.perf_counter()
             try:
-                async with self._client(request_timeout) as client:
-                    resp = await client.post(f"{ep.api_base}/chat/completions", json=payload)
-                elapsed = time.perf_counter() - start
-                if resp.status_code == 400 and extras and any(k in payload for k in extras):
-                    # Strict servers reject unknown fields; retry once without them.
-                    log.info("model_thinking_hint_rejected", model=ep.model)
-                    for key in extras:
+                status, error_text, parsed = await self._send(payload, request_timeout)
+                if status == 400 and optional:
+                    log.info("model_optional_fields_rejected", model=ep.model, fields=optional)
+                    for key in optional:
                         payload.pop(key, None)
-                    async with self._client(request_timeout) as client:
-                        resp = await client.post(f"{ep.api_base}/chat/completions", json=payload)
-                    elapsed = time.perf_counter() - start
-                if resp.status_code == 429 or resp.status_code >= 500:
+                    optional = []
+                    status, error_text, parsed = await self._send(payload, request_timeout)
+                elapsed = time.perf_counter() - start
+                if status == 429 or status >= 500:
+                    raise ModelError(f"Model endpoint returned HTTP {status}", retryable=True)
+                if status >= 400 or parsed is None:
                     raise ModelError(
-                        f"Model endpoint returned HTTP {resp.status_code}", retryable=True
+                        f"Model endpoint rejected the request (HTTP {status}): {error_text}"
                     )
-                if resp.status_code >= 400:
-                    raise ModelError(
-                        f"Model endpoint rejected the request (HTTP {resp.status_code}): "
-                        f"{_error_snippet(resp)}"
-                    )
-                data = resp.json()
-                choice = (data.get("choices") or [{}])[0]
-                message = choice.get("message") or {}
-                # Reasoning servers (vLLM, SGLang, LM Studio, Ollama) may return the
-                # chain of thought separately; only ``content`` is the answer.
-                content = message.get("content") or ""
-                usage_raw = data.get("usage") or {}
+                raw_usage = parsed["usage"] or {}
                 usage = Usage(
-                    prompt_tokens=int(usage_raw.get("prompt_tokens") or 0),
-                    completion_tokens=int(usage_raw.get("completion_tokens") or 0),
+                    prompt_tokens=int(raw_usage.get("prompt_tokens") or 0),
+                    completion_tokens=int(raw_usage.get("completion_tokens") or 0),
                     calls=1,
                 )
                 self._record("success", elapsed, usage)
                 return ChatResult(
-                    content=content,
+                    content=parsed["content"],
                     usage=usage,
                     latency_ms=round(elapsed * 1000, 1),
-                    finish_reason=choice.get("finish_reason"),
+                    finish_reason=parsed["finish_reason"],
+                )
+            except httpx.ReadTimeout:
+                # Re-sending would only wait the same way again.
+                last_error = ModelError(
+                    f"Model produced no output for {idle:.0f} s (read timeout). Increase "
+                    "the endpoint timeout in Settings > AI Models, or check the model server."
                 )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = ModelError(
@@ -422,6 +426,23 @@ class ModelClient:
             await self._sleep(min(0.5 * 2 ** (attempt - 1), 8.0))
         assert last_error is not None  # noqa: S101
         raise last_error
+
+    async def _send(
+        self, payload: dict[str, Any], request_timeout: float | None
+    ) -> tuple[int, str, dict[str, Any] | None]:
+        """POST once; returns (status, error text, normalised completion or None)."""
+        url = f"{self.endpoint.api_base}/chat/completions"
+        async with (
+            self._client(request_timeout) as client,
+            client.stream("POST", url, json=payload) as resp,
+        ):
+            if resp.status_code >= 400:
+                await resp.aread()
+                return resp.status_code, _error_snippet(resp), None
+            if "text/event-stream" in resp.headers.get("content-type", ""):
+                return resp.status_code, "", await _read_event_stream(resp)
+            await resp.aread()
+            return resp.status_code, "", _parse_completion(resp.json())
 
     async def structured[T: BaseModel](
         self,
@@ -569,6 +590,46 @@ def normalise_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
     system = "\n\n".join(m.content for m in messages if m.role == "system" and m.content)
     rest = [{"role": m.role, "content": m.content} for m in messages if m.role != "system"]
     return ([{"role": "system", "content": system}] if system else []) + rest
+
+
+def _parse_completion(data: dict[str, Any]) -> dict[str, Any]:
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    # Reasoning servers (vLLM, SGLang, LM Studio, Ollama) may return the chain of
+    # thought separately (reasoning_content); only ``content`` is the answer.
+    return {
+        "content": message.get("content") or "",
+        "finish_reason": choice.get("finish_reason"),
+        "usage": data.get("usage"),
+    }
+
+
+async def _read_event_stream(resp: httpx.Response) -> dict[str, Any]:
+    """Accumulate an OpenAI-style SSE completion stream."""
+    parts: list[str] = []
+    finish: str | None = None
+    usage: dict[str, Any] | None = None
+    async for line in resp.aiter_lines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        chunk = json.loads(data)
+        if chunk.get("error"):
+            err = chunk["error"]
+            msg = err.get("message", err) if isinstance(err, dict) else err
+            raise ModelError(f"Model endpoint error: {str(msg)[:200]}")
+        if chunk.get("usage"):
+            usage = chunk["usage"]
+        for choice in chunk.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                parts.append(delta["content"])
+            if choice.get("finish_reason"):
+                finish = choice["finish_reason"]
+    return {"content": "".join(parts), "finish_reason": finish, "usage": usage}
 
 
 def _error_snippet(resp: httpx.Response) -> str:

@@ -98,7 +98,8 @@ async def test_chat_does_not_retry_client_errors() -> None:
     client = ModelClient(_ep(), transport=httpx.MockTransport(handler), sleep=_nosleep)
     with pytest.raises(ModelError, match="bad model"):
         await client.chat([ChatMessage("user", "x")])
-    assert len(attempts) == 1
+    # one resend without optional fields (stream_options), then no retries
+    assert len(attempts) == 2
 
 
 async def test_chat_unreachable() -> None:
@@ -124,7 +125,7 @@ async def test_api_key_header_and_payload() -> None:
     assert seen["auth"] == "Bearer sk-local"
     assert seen["body"]["model"] == "m"
     assert seen["body"]["max_tokens"] == 50
-    assert seen["body"]["stream"] is False
+    assert seen["body"]["stream"] is True
 
 
 class Out(BaseModel):
@@ -305,3 +306,49 @@ async def test_structured_unwraps_and_reports_detail() -> None:
         await client.structured([ChatMessage("user", "x")], Out, repair_attempts=0)
     assert "No JSON object found" in str(info.value)
     assert info.value.detail == "I cannot answer that"
+
+
+def _sse(*events: dict[str, Any]) -> httpx.Response:
+    body = "".join(f"data: {json.dumps(e)}\n\n" for e in events) + "data: [DONE]\n\n"
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+
+async def test_chat_reads_event_stream() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        assert body["stream_options"] == {"include_usage": True}
+        return _sse(
+            {"choices": [{"delta": {"reasoning_content": "hmm {"}}]},
+            {"choices": [{"delta": {"content": '{"answer"'}}]},
+            {"choices": [{"delta": {"content": ": 4}"}, "finish_reason": "stop"}]},
+            {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 30}},
+        )
+
+    client = ModelClient(_ep(), transport=httpx.MockTransport(handler))
+    result = await client.structured([ChatMessage("user", "x")], Out)
+    assert result.value.answer == 4
+    assert result.usage.completion_tokens == 30
+
+
+async def test_stream_error_chunk() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _sse({"error": {"message": "context length exceeded"}})
+
+    client = ModelClient(_ep(), transport=httpx.MockTransport(handler), sleep=_nosleep)
+    with pytest.raises(ModelError, match="context length exceeded"):
+        await client.chat([ChatMessage("user", "x")])
+
+
+async def test_read_timeout_is_not_retried() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        raise httpx.ReadTimeout("slow")
+
+    client = ModelClient(_ep(timeout_seconds=30), transport=httpx.MockTransport(handler))
+    with pytest.raises(ModelError, match="no output for 30 s") as info:
+        await client.chat([ChatMessage("user", "x")])
+    assert not info.value.retryable
+    assert len(calls) == 1
