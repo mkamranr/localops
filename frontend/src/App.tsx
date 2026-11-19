@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ApiError, refreshAccessToken } from "@/api/client";
 import { authApi } from "@/api/endpoints";
@@ -11,6 +11,8 @@ import { AssistantPage } from "@/pages/AssistantPage";
 import { AuditLogsPage } from "@/pages/AuditLogsPage";
 import { ComingSoonPage } from "@/pages/ComingSoonPage";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { InfrastructurePage } from "@/pages/infrastructure/InfrastructurePage";
+import { IntegrationsPage } from "@/pages/IntegrationsPage";
 import { InvestigationDetailPage } from "@/pages/investigations/InvestigationDetailPage";
 import { InvestigationsPage } from "@/pages/investigations/InvestigationsPage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -22,6 +24,15 @@ import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { TenantsPage } from "@/pages/settings/TenantsPage";
 import { UsersPage } from "@/pages/settings/UsersPage";
 import { useAuthStore } from "@/stores/authStore";
+
+// The graph library is large; load the pages that draw graphs on demand.
+const DependenciesPage = lazy(() =>
+  import("@/pages/infrastructure/DependenciesPage").then((m) => ({ default: m.DependenciesPage })),
+);
+const ResourceDetailPage = lazy(() =>
+  import("@/pages/infrastructure/ResourceDetailPage").then((m) => ({ default: m.ResourceDetailPage })),
+);
+const lazyPage = (node: ReactNode) => <Suspense fallback={<Spinner />}>{node}</Suspense>;
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -130,6 +141,10 @@ export function AppRoutes() {
             </RequirePermission>
           }
         />
+        <Route path="infrastructure" element={<RequirePermission permission="resource.read"><InfrastructurePage /></RequirePermission>} />
+        <Route path="infrastructure/:id" element={<RequirePermission permission="resource.read">{lazyPage(<ResourceDetailPage />)}</RequirePermission>} />
+        <Route path="dependencies" element={<RequirePermission permission="resource.read">{lazyPage(<DependenciesPage />)}</RequirePermission>} />
+        <Route path="integrations" element={<RequirePermission permission="integration.read"><IntegrationsPage /></RequirePermission>} />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="account" replace />} />
           <Route path="account" element={<AccountPage />} />

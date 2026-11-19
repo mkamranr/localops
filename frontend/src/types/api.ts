@@ -243,10 +243,20 @@ export interface InvestigationReport {
   classification_verified: boolean;
   affected_entities: string[];
   symptoms: string[];
-  resources: { name: string; resolved: boolean; resource_id: string | null }[];
+  resources: {
+    name: string;
+    entity?: string;
+    resolved: boolean;
+    resource_id: string | null;
+    match?: "exact" | "partial";
+    resource_type?: string;
+    health?: string;
+    reason?: "ambiguous" | "not_in_inventory";
+    candidates?: { name: string; resource_id: string; resource_type: string }[];
+  }[];
   clarifications: { question: string; answer: string }[];
   tasks: ReportTask[];
-  evidence: unknown[];
+  evidence: EvidenceItem[];
   evidence_sufficient: boolean;
   root_cause: string | null;
   conclusion: string;
@@ -264,4 +274,247 @@ export interface InvestigationEvent {
   agent_name: string | null;
   event_data: Record<string, unknown>;
   created_at: string;
+}
+
+// ------------------------------------------------------------------ Inventory (Phase 3)
+
+export type IntegrationType = "linux_ssh" | "windows_winrm" | "docker" | "http";
+export type HealthStatus = "healthy" | "degraded" | "unhealthy" | "unknown";
+export type ResourceType =
+  | "linux_server"
+  | "windows_server"
+  | "docker_host"
+  | "docker_container"
+  | "http_service"
+  | "application"
+  | "database"
+  | "network_device"
+  | "other";
+export type RelationshipType =
+  | "HOSTS"
+  | "DEPENDS_ON"
+  | "CONNECTS_TO"
+  | "RUNS_ON"
+  | "STORES_DATA_IN"
+  | "EXPOSES"
+  | "MONITORED_BY"
+  | "MANAGED_BY";
+
+export interface Target {
+  host: string;
+  port?: number | null;
+  name?: string | null;
+}
+
+export interface IntegrationSettings {
+  username?: string | null;
+  port?: number | null;
+  timeout_seconds?: number;
+  docker?: "auto" | "off";
+  mode?: "ssh" | "tls";
+  verify_hostname?: boolean;
+  use_https?: boolean;
+  transport?: "ntlm" | "basic";
+  verify_tls?: boolean;
+  expected_status?: number[];
+  slow_ms?: number;
+}
+
+export interface IntegrationCredentials {
+  password?: string;
+  private_key?: string;
+  passphrase?: string;
+  ca?: string;
+  cert?: string;
+  key?: string;
+}
+
+export interface Integration {
+  id: string;
+  name: string;
+  integration_type: IntegrationType;
+  description: string;
+  configuration: IntegrationSettings;
+  targets: Target[];
+  enabled: boolean;
+  schedule_minutes: number | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: "completed" | "partial" | "failed" | null;
+  last_error: string | null;
+  created_at: string;
+  has_credentials: boolean;
+  credential_fields: string[];
+  resource_count: number;
+}
+
+export interface IntegrationTestResult {
+  ok: boolean;
+  target: string;
+  message: string;
+  details: Record<string, unknown>;
+}
+
+export interface TargetResult {
+  target: string;
+  ok: boolean;
+  duration_ms: number;
+  resources: number;
+  error?: string;
+  error_code?: string;
+  details?: Record<string, unknown>;
+  host_key_fingerprint?: string;
+  host_key_pinned_now?: boolean;
+}
+
+export interface DiscoveryRun {
+  id: string;
+  integration_id: string;
+  trigger: "manual" | "scheduled";
+  triggered_by: string | null;
+  status: "queued" | "running" | "completed" | "partial" | "failed";
+  started_at: string;
+  completed_at: string | null;
+  stats: Partial<Record<string, number>> & { only_target?: string };
+  target_results: TargetResult[];
+  error: string | null;
+}
+
+export interface HostKey {
+  id: string;
+  host: string;
+  port: number;
+  key_type: string;
+  fingerprint: string;
+  first_seen_at: string;
+  last_seen_at: string | null;
+}
+
+export interface ResourceSummary {
+  id: string;
+  name: string;
+  resource_type: ResourceType;
+  hostname: string | null;
+  ip_addresses: string[];
+  os: string | null;
+  environment: string | null;
+  group_name: string | null;
+  owner: string | null;
+  tags: string[];
+  health_status: HealthStatus;
+  health_reasons: string[];
+  source: "discovered" | "manual";
+  stale: boolean;
+  integration_id: string | null;
+  last_seen_at: string | null;
+  created_at: string;
+}
+
+export interface Resource extends ResourceSummary {
+  description: string;
+  facts: Record<string, unknown>;
+  last_health_at: string | null;
+  discovery_target: string | null;
+  updated_at: string | null;
+  integration_name: string | null;
+}
+
+export interface ResourceInput {
+  name: string;
+  resource_type: ResourceType;
+  hostname?: string | null;
+  ip_addresses?: string[];
+  os?: string | null;
+  environment?: string | null;
+  group_name?: string | null;
+  owner?: string | null;
+  tags?: string[];
+  description?: string;
+}
+
+export interface ResourceEvent {
+  id: string;
+  event_type: string;
+  summary: string;
+  details: Record<string, unknown>;
+  actor: string | null;
+  created_at: string;
+}
+
+export interface MetricSample {
+  taken_at: string;
+  cpu_load: number | null;
+  cpu_count: number | null;
+  memory_percent: number | null;
+  disk_percent: number | null;
+  latency_ms: number | null;
+}
+
+export interface Relationship {
+  id: string;
+  source_id: string;
+  target_id: string;
+  relationship_type: RelationshipType;
+  source: "discovered" | "manual";
+  confidence: number;
+  properties: Record<string, unknown>;
+  last_seen_at: string | null;
+  created_at: string;
+}
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  resource_type: ResourceType;
+  health_status: HealthStatus;
+  environment: string | null;
+  group_name: string | null;
+  stale: boolean;
+  depth: number | null;
+  direction: "self" | "upstream" | "downstream" | null;
+}
+
+export interface GraphEdge {
+  id: string;
+  source_id: string;
+  target_id: string;
+  relationship_type: RelationshipType;
+  source: "discovered" | "manual";
+  confidence: number;
+}
+
+export interface DependencyGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  blast_radius: string[];
+  truncated: boolean;
+}
+
+export interface InventorySummary {
+  total: number;
+  by_health: Partial<Record<HealthStatus, number>>;
+  by_type: Partial<Record<ResourceType, number>>;
+  stale: number;
+  last_discovery_at: string | null;
+  integrations: number;
+}
+
+export interface InventoryFacets {
+  environments: string[];
+  groups: string[];
+  tags: string[];
+}
+
+export interface EvidenceItem {
+  source: string;
+  agent: string;
+  resource_id?: string;
+  resource: string;
+  resource_type?: ResourceType;
+  summary: string;
+  findings?: string[];
+  depends_on?: string[];
+  dependents?: number;
+  health?: HealthStatus;
+  observed_at?: string;
 }

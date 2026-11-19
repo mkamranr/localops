@@ -1,4 +1,4 @@
-"""Hands investigation runs to an executor.
+"""Hands investigation and discovery runs to an executor.
 
 Production uses the arq worker (``ArqDispatcher``); tests and single-process setups
 can use ``InlineDispatcher``, which runs the graph as an in-process task.
@@ -21,6 +21,7 @@ from app.llm.gateway import ModelClient
 log = get_logger("localops.dispatch")
 
 JOB_NAME = "run_investigation"
+DISCOVERY_JOB = "run_discovery"
 QUEUE_NAME = "localops:queue"
 
 
@@ -28,6 +29,8 @@ class InvestigationDispatcher(Protocol):
     async def enqueue(
         self, tenant_id: uuid.UUID, investigation_id: uuid.UUID, resume: str | None = None
     ) -> None: ...
+
+    async def enqueue_discovery(self, tenant_id: uuid.UUID, run_id: uuid.UUID) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -45,6 +48,15 @@ class ArqDispatcher:
             str(investigation_id),
             resume,
             _job_id=f"investigation:{investigation_id}:{uuid.uuid4().hex[:8]}",
+            _queue_name=QUEUE_NAME,
+        )
+
+    async def enqueue_discovery(self, tenant_id: uuid.UUID, run_id: uuid.UUID) -> None:
+        await self._pool.enqueue_job(
+            DISCOVERY_JOB,
+            str(tenant_id),
+            str(run_id),
+            _job_id=f"discovery:{run_id}",
             _queue_name=QUEUE_NAME,
         )
 
@@ -78,6 +90,15 @@ class InlineDispatcher:
                 resume=resume,
                 client_factory=self.client_factory,
             )
+        )
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def enqueue_discovery(self, tenant_id: uuid.UUID, run_id: uuid.UUID) -> None:
+        from app.discovery.engine import run_discovery
+
+        task: asyncio.Task[object] = asyncio.create_task(
+            run_discovery(self.settings, tenant_id=tenant_id, run_id=run_id, redis=self.redis)
         )
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)

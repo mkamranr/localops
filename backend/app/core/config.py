@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     investigation_timeout_seconds: int = Field(1800, ge=60)
     investigation_max_clarifications: int = Field(2, ge=0, le=5)
 
+    # --- Infrastructure discovery ---
+    discovery_concurrency: int = Field(8, ge=1, le=64)  # targets collected in parallel
+    discovery_max_targets: int = Field(500, ge=1, le=5000)  # per integration
+    metric_retention_days: int = Field(30, ge=1, le=3650)
+
     @model_validator(mode="after")
     def _reject_placeholders(self) -> Settings:
         if self.app_env == "production":

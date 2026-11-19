@@ -212,6 +212,8 @@ that delegates work to specialist agents. Available agents:
 
 Rules:
 - Choose between 1 and 5 tasks; each task names exactly one agent from the list above.
+- When affected entities were resolved in the inventory, include one discovery task to \
+collect their inventory evidence (health, facts, dependencies).
 - Each objective must be concrete and checkable (what to inspect and why).
 - Do not propose remediation actions unless the request explicitly asks for a fix; even \
 then, use remediation_planner only to *plan*.
@@ -232,8 +234,14 @@ def plan_messages(
     entities = ", ".join(classification.affected_entities) or "none identified"
     symptoms = "; ".join(classification.symptoms) or "none stated"
     known = (
-        ", ".join(str(r.get("name")) for r in resources if r.get("resolved"))
-        or "none (inventory not yet available)"
+        "; ".join(
+            f"{r.get('name')} ({r.get('resource_type')}, health {r.get('health')}"
+            + (f", {r.get('environment')}" if r.get("environment") else "")
+            + ")"
+            for r in resources
+            if r.get("resolved")
+        )
+        or "none"
     )
     body = (
         f"Operator request:\n<request>\n{request}\n</request>\n\n"

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-IMPLEMENTED_PHASE: Final = 2
+IMPLEMENTED_PHASE: Final = 3
 
 DEFAULT_AGENT_CONFIG: Final[dict[str, Any]] = {
     "temperature": 0.1,
@@ -49,7 +49,8 @@ CATALOGUE: Final[tuple[AgentSpec, ...]] = (
     AgentSpec(
         "discovery",
         "Discovery Agent",
-        "Builds and refreshes the infrastructure inventory and topology.",
+        "Resolves affected systems against the infrastructure inventory and reports their "
+        "health, key facts and dependencies as evidence.",
         3,
         capabilities=("inventory", "topology"),
     ),

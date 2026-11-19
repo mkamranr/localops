@@ -36,6 +36,9 @@ class MemoryRuntime(InvestigationRuntime):
         self.events: list[tuple[str, str | None, dict[str, Any]]] = []
         self.executions: list[dict[str, Any]] = []
         self.cancelled = False
+        # entity -> resolved resource summary
+        self.inventory: dict[str, dict[str, Any]] = {}
+        self.resource_ids: list[str] = []
 
     async def emit(
         self, event_type: str, agent: str | None = None, data: dict[str, Any] | None = None
@@ -57,6 +60,32 @@ class MemoryRuntime(InvestigationRuntime):
             EndpointConfig(provider="ollama", base_url="http://llm:11434", model="m"),
             None,
         )
+
+    async def resolve_entities(self, entities: list[str]) -> list[dict[str, Any]]:
+        out = []
+        for e in entities:
+            if e in self.inventory:
+                out.append({"entity": e, "resolved": True, "match": "exact", **self.inventory[e]})
+            else:
+                out.append({"entity": e, "name": e, "resolved": False, "resource_id": None})
+        return out
+
+    async def inventory_evidence(self, resource_ids: list[uuid.UUID]) -> list[dict[str, Any]]:
+        by_id = {r["resource_id"]: r for r in self.inventory.values()}
+        return [
+            {
+                "source": "inventory",
+                "agent": "discovery",
+                "resource": by_id[str(i)]["name"],
+                "health": by_id[str(i)]["health"],
+                "summary": f"Health {by_id[str(i)]['health']}",
+            }
+            for i in resource_ids
+            if str(i) in by_id
+        ]
+
+    async def set_resource_ids(self, resource_ids: list[str]) -> None:
+        self.resource_ids = resource_ids
 
     async def start_execution(self, agent_type: str, node: str) -> tuple[uuid.UUID, float]:
         self.executions.append({"agent": agent_type, "node": node, "status": "running"})

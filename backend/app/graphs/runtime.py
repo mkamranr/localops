@@ -97,6 +97,26 @@ class InvestigationRuntime:
         if cancelled:
             raise InvestigationCancelledError
 
+    # ------------------------------------------------------------ inventory
+
+    async def resolve_entities(self, entities: list[str]) -> list[dict[str, Any]]:
+        from app.agents import discovery
+
+        async with tenant_session(self.tenant_id) as session:
+            return await discovery.resolve_entities(session, entities)
+
+    async def inventory_evidence(self, resource_ids: list[uuid.UUID]) -> list[dict[str, Any]]:
+        from app.agents import discovery
+
+        async with tenant_session(self.tenant_id) as session:
+            return await discovery.evidence_for(session, resource_ids)
+
+    async def set_resource_ids(self, resource_ids: list[str]) -> None:
+        async with tenant_session(self.tenant_id) as session:
+            inv = await session.get(Investigation, self.investigation_id)
+            if inv is not None:
+                inv.resource_ids = list(dict.fromkeys(resource_ids))
+
     # --------------------------------------------------------------- agents
 
     async def bind_agent(self, agent_type: str) -> AgentBinding:

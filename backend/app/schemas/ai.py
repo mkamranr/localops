@@ -205,6 +205,7 @@ class InvestigationOut(ApiModel):
 
 class InvestigationDetail(InvestigationOut):
     result: dict[str, Any]
+    resource_ids: list[str] = Field(default_factory=list)
     username: str | None = None
 
 

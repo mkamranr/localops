@@ -1,9 +1,9 @@
-# AI Orchestration (Phase 2)
+# AI Orchestration (Phase 3)
 
 Phase 2 adds the model gateway, the agent registry, the LangGraph investigation workflow with
 persistent checkpoints, and live progress streaming. Specialist diagnostic agents arrive in
-later phases. Until then the Supervisor classifies and plans, and the report states plainly that
-no evidence was collected.
+later phases. Phase 3 connects investigations to the infrastructure inventory: entities are
+verified against it, and the Discovery agent contributes inventory evidence.
 
 ```mermaid
 flowchart LR
@@ -72,7 +72,7 @@ timeout and retries.
 | Agent | Available |
 |---|---|
 | Supervisor | Phase 2 |
-| Discovery | Phase 3 |
+| Discovery | Phase 3 (available) |
 | Incident Triage, Infrastructure / Application / Network Diagnostics, Root Cause Analysis, Change Impact | Phase 4 |
 | Remediation Planner, Verification | Phase 5 |
 | Knowledge | Phase 6 |
@@ -91,11 +91,19 @@ classify ─► clarify? (interrupt; at most INVESTIGATION_MAX_CLARIFICATIONS) �
   can request clarification.
 - **clarify**: pauses the graph with a LangGraph `interrupt`. The investigation becomes
   `awaiting_input` until a user answers (`POST /investigations/{id}/resume`).
-- **resolve_resources**: stub until the Phase 3 inventory. Entities are marked *unverified*.
+- **resolve_resources**: matches each entity against the inventory. An exact name, hostname,
+  short hostname or IP resolves. A single partial match resolves and is marked `partial`.
+  Several partial matches are reported as *ambiguous* with candidates. Matched resources are
+  stored on the investigation (`resource_ids`) and shown as verified in the UI.
+- **plan_tasks** also sees the matched resources (type, health, environment) as delimited data,
+  and must include a Discovery task when any entity resolved.
+- **Discovery agent** (no LLM): for each matched resource it returns stored facts as evidence:
+  health and reasons, last-seen time and staleness, the disks, memory, services or containers
+  behind the health status, upstream dependencies and the number of dependents.
 - **plan_tasks** (LLM): 1–5 tasks. Unknown agents, duplicates and extras are dropped.
-- **report**: deterministic. It records the classification (labelled unverified), the plan, task
-  outcomes and the next steps. With no evidence, `root_cause` is `null` and the conclusion says
-  so. Nothing is fabricated.
+- **report**: deterministic. It records the classification, the verified resources, the plan,
+  task outcomes, inventory evidence and the next steps. `root_cause` stays `null` until the
+  Phase 4 diagnostic agents can support one. Nothing is fabricated.
 
 Each instrumented node checks for cancellation, emits `agent.started`/`completed`/`failed`, and
 writes an `agent_executions` row with model, tokens and duration.

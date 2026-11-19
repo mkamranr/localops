@@ -1,4 +1,4 @@
-# Security Model (Phase 2)
+# Security Model (Phase 3)
 
 ## Authentication
 
@@ -71,14 +71,48 @@ reads return nothing and cross-tenant writes are rejected (`test_investigations.
 - Request text is passed to the model as delimited data, with an instruction to ignore embedded
   instructions. This reduces, but cannot eliminate, prompt injection, which is why model output
   never directly causes actions.
-- Reports never invent evidence. Classifications are labelled unverified. Without diagnostic
-  evidence, no root cause is stated.
+- Reports never invent evidence. Entities are marked verified only when they match the
+  inventory, and evidence comes from stored inventory data, not from the model. No root cause is
+  stated until the Phase 4 diagnostic agents supply supporting evidence.
 - Prompts and completions are not logged; only token counts, latency and outcome are.
 - `autonomous` execution mode is refused until Phase 5.
 
+## Infrastructure access (Phase 3)
+
+- **Read-only, allowlisted collection.** Each collector holds a constant script: a POSIX shell
+  script piped to `sh -s`, fixed PowerShell, fixed `docker` CLI invocations, or Engine API GET
+  requests. No user-supplied or model-supplied text is ever executed on a target. Targets are
+  validated as hostnames or IPs (no leading `-`, so no option injection), and only
+  administrators with `integration.configure` can define them.
+- **Credentials** (passwords, private keys and passphrases, TLS client keys) are Fernet-encrypted
+  with `LOCALOPS_ENCRYPTION_KEY`. They are write-only through the API (only the field *names*
+  are returned), never logged, never included in audit details, and never passed to a language
+  model. TLS client material is written to private temporary files for the duration of one
+  connection only.
+- **SSH host-key pinning.** The first successful connection pins the server key per
+  (tenant, host, port). Later connections offer only the pinned key's algorithm and accept only
+  that key. A mismatch is refused with `host_key_changed`, the presented fingerprint is
+  recorded in the audit log (`integration.host_key_mismatch`), and the pin can only be reset by
+  `integration.configure` (`integration.host_key_reset`, audited). The SSH client never reads
+  local `~/.ssh` configuration, known_hosts files or agents.
+- **Docker access.** Docker-over-SSH requires the account to be in the `docker` group, which is
+  root-equivalent on that host. TLS mode is the alternative; its client certificate grants full
+  control of the daemon. This is documented in the UI and the installation guide.
+- **WinRM** uses NTLM with message encryption over HTTP, or HTTPS. Basic authentication is
+  refused unless HTTPS is used.
+- **Limits.** Every connection and command has a timeout. Command output is capped at 2 MB,
+  collected lists are capped, targets per integration are capped (`DISCOVERY_MAX_TARGETS`), and
+  per-run parallelism is bounded (`DISCOVERY_CONCURRENCY`). One discovery run per integration
+  executes at a time (Redis lock).
+- **Inventory data in prompts.** Resource names, health and facts that reach the Supervisor are
+  passed as delimited data. A hostile hostname cannot cause an action, because model output
+  never executes anything.
+- All seven inventory tables are under row-level security. Resources, relationships,
+  integrations and host keys of other tenants return `404`.
+
 ## Secrets at rest
 
-Model API keys are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) using
+Model API keys and integration credentials are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) using
 `LOCALOPS_ENCRYPTION_KEY`. That key is separate from `APP_SECRET_KEY` so either can rotate
 independently. Keys are write-only through the API, and the audit log records only that a key
 was set, replaced or cleared.

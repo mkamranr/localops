@@ -3,9 +3,10 @@
     classify ──► clarify? (interrupt, ≤N times) ──► resolve_resources ──► plan_tasks
         ──► run_agent (one per task, fan-out via Send) ──► aggregate ──► report
 
-Phase 2 ships the orchestration framework and the Supervisor. Specialist agents land
-in later phases; until then their tasks are reported as *skipped* and the report says
-plainly that no evidence was collected. Nothing here fabricates diagnostic findings.
+Entities named in the request are resolved against the resource inventory. The
+Discovery agent (no LLM) turns resolved resources into inventory evidence: health,
+key facts and dependencies. Other specialists land in later phases; their tasks are
+reported as *skipped*. Nothing here fabricates diagnostic findings.
 
 State holds JSON-compatible values only so checkpoints stay portable.
 """
@@ -13,6 +14,7 @@ State holds JSON-compatible values only so checkpoints stay portable.
 from __future__ import annotations
 
 import operator
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, TypedDict
 
@@ -121,18 +123,21 @@ def build_graph(
         }
 
     async def resolve_resources(state: InvestigationState, call: NodeCall) -> dict[str, Any]:
-        # The resource inventory arrives in Phase 3. Until then entities stay unresolved
-        # and are labelled as such rather than guessed.
+        # Entities are matched against the inventory; unmatched ones stay unverified
+        # (with candidates where the match was ambiguous) rather than guessed.
         entities = state["classification"].get("affected_entities", [])
-        resources = [{"name": e, "resolved": False, "resource_id": None} for e in entities]
+        resources = await rt.resolve_entities(entities)
+        matched = [r["resource_id"] for r in resources if r.get("resolved")]
+        if matched:
+            await rt.set_resource_ids(matched)
         await rt.emit(
             "resources.resolved",
             "supervisor",
             {
-                "resolved": 0,
-                "unresolved": len(resources),
+                "resolved": len(matched),
+                "unresolved": len(resources) - len(matched),
                 "entities": entities,
-                "note": "Resource inventory is not available yet; entities are unverified.",
+                "resources": resources,
             },
         )
         return {"resources": resources}
@@ -164,7 +169,9 @@ def build_graph(
             reason = f"Agent not available yet (planned for phase {phase})"
         elif not binding.enabled:
             reason = "Agent is disabled"
-        else:  # pragma: no cover - no specialist is implemented in phase 2
+        elif task["agent"] == "discovery":
+            return await run_discovery_task(task, payload.get("resources") or [])
+        else:  # pragma: no cover - every implemented specialist has an executor
             reason = "Agent has no executor registered"
         await rt.emit(
             "agent.skipped",
@@ -179,6 +186,44 @@ def build_graph(
                     "status": "skipped",
                     "reason": reason,
                     "evidence": [],
+                }
+            ]
+        }
+
+    async def run_discovery_task(
+        task: dict[str, Any], resources: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        execution = await rt.start_execution("discovery", "run_agent")
+        await rt.emit("agent.started", "discovery", {"node": "run_agent", "task_id": task["id"]})
+        call = NodeCall()
+        ids = [uuid.UUID(r["resource_id"]) for r in resources if r.get("resolved")]
+        try:
+            evidence = await rt.inventory_evidence(ids)
+        except Exception as exc:
+            await rt.finish_execution(execution, status="failed", call=call, error=str(exc))
+            raise
+        duration = await rt.finish_execution(execution, status="success", call=call)
+        status = "completed" if evidence else "skipped"
+        reason = None if evidence else "No affected entity matched a resource in the inventory"
+        await rt.emit(
+            "agent.completed",
+            "discovery",
+            {
+                "node": "run_agent",
+                "task_id": task["id"],
+                "duration_ms": duration,
+                "evidence_items": len(evidence),
+                "llm_calls": 0,
+            },
+        )
+        return {
+            "findings": [
+                {
+                    "task_id": task["id"],
+                    "agent": "discovery",
+                    "status": status,
+                    "reason": reason,
+                    "evidence": evidence,
                 }
             ]
         }
@@ -217,7 +262,8 @@ def build_graph(
         tasks = state.get("tasks", [])
         if not tasks:
             return "aggregate"
-        return [Send("run_agent", {"task": t}) for t in tasks]
+        resources = state.get("resources", [])
+        return [Send("run_agent", {"task": t, "resources": resources}) for t in tasks]
 
     # Node callables are wrapped dynamically; langgraph's overloads cannot type them.
     graph: Any = StateGraph(InvestigationState)
@@ -258,24 +304,40 @@ def build_report(state: InvestigationState) -> dict[str, Any]:
         }
         for t in tasks
     ]
-    if evidence:  # pragma: no cover - evidence-producing agents arrive in phase 4
-        conclusion = "Evidence was collected; see findings."
+    if evidence:
+        unwell = [e["resource"] for e in evidence if e.get("health") in ("unhealthy", "degraded")]
+        conclusion = (
+            f"Inventory evidence was collected for {len(evidence)} resource(s)"
+            + (f"; not healthy: {', '.join(unwell)}" if unwell else "; all reported healthy")
+            + ". It reflects the last discovered state, not live diagnostics, so no root "
+            "cause is stated yet."
+        )
     else:
         conclusion = (
             "No diagnostic evidence was collected, so no root cause can be stated. "
             "The request was classified and an investigation plan was produced; the "
             "specialist agents that gather evidence are not available yet."
         )
-    next_steps = [f"{t['agent'].replace('_', ' ').title()}: {t['objective']}" for t in tasks] or [
-        "Refine the request with a specific system, service or symptom."
+    # Completed tasks are reported as evidence; only the rest remain as next steps.
+    next_steps = [
+        f"{t['agent'].replace('_', ' ').title()}: {t['objective']}"
+        for t in task_rows
+        if t["status"] != "completed"
     ]
+    if not next_steps:
+        next_steps = (
+            ["Review the inventory evidence above and the affected resources' dependencies."]
+            if evidence
+            else ["Refine the request with a specific system, service or symptom."]
+        )
     return {
         "workflow": WORKFLOW_ID,
         "summary": c.get("summary", ""),
         "request_type": c.get("request_type"),
         "urgency": c.get("urgency"),
         "classification_confidence": c.get("confidence"),
-        "classification_verified": False,
+        "classification_verified": bool(state.get("resources"))
+        and all(r.get("resolved") for r in state.get("resources", [])),
         "affected_entities": c.get("affected_entities", []),
         "symptoms": c.get("symptoms", []),
         "resources": state.get("resources", []),

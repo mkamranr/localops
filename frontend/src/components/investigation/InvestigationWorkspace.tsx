@@ -30,9 +30,11 @@ import { Alert, Badge, EmptyState, ErrorState, Panel, Spinner } from "@/componen
 import { Input } from "@/components/ui/form";
 import { useInvestigationStream, type StreamState } from "@/hooks/useInvestigationStream";
 import { useAuthStore } from "@/stores/authStore";
-import type { InvestigationDetail, InvestigationEvent, ReportTask } from "@/types/api";
+import { Link } from "react-router-dom";
+import { HealthBadge } from "@/components/inventory/shared";
+import type { InvestigationDetail, InvestigationEvent, InvestigationReport, ReportTask } from "@/types/api";
 import { cn } from "@/utils/cn";
-import { formatDateTime } from "@/utils/format";
+import { formatDateTime, formatRelative } from "@/utils/format";
 
 interface Classification {
   request_type?: string;
@@ -107,10 +109,46 @@ function ConfidenceRing({ value }: { value: number }) {
   );
 }
 
+type ResolvedResource = NonNullable<InvestigationReport["resources"]>[number];
+
+function EntityChip({ entity, match }: { entity: string; match?: ResolvedResource }) {
+  if (match?.resolved && match.resource_id) {
+    return (
+      <Link
+        to={`/infrastructure/${match.resource_id}`}
+        title={`Verified in inventory: ${match.name}${match.match === "partial" ? " (partial match)" : ""}`}
+        className="inline-flex items-center gap-1 rounded-md border border-green-500/30 bg-green-500/10 px-2 py-0.5 font-mono text-xs text-green-300 hover:underline"
+      >
+        <CheckCircle2 className="size-3" /> {entity}
+        {match.name !== entity && <span className="text-green-300/70">→ {match.name}</span>}
+      </Link>
+    );
+  }
+  const title = match
+    ? match.reason === "ambiguous"
+      ? `Ambiguous: ${(match.candidates ?? []).map((c) => c.name).join(", ")}`
+      : "Not found in the inventory"
+    : undefined;
+  return (
+    <span
+      title={title}
+      className={cn(
+        "rounded-md border px-2 py-0.5 font-mono text-xs",
+        match ? "border-amber-500/30 bg-amber-500/10 text-amber-300" : "border-sky-500/30 bg-sky-500/10 text-sky-300",
+      )}
+    >
+      {entity}
+      {match?.reason === "ambiguous" && " ?"}
+    </span>
+  );
+}
+
 function ReasoningPanel({
   classification,
   waiting,
+  resources,
 }: {
+  resources: ResolvedResource[];
   classification: Classification | null;
   waiting: boolean;
 }) {
@@ -143,7 +181,7 @@ function ReasoningPanel({
             {classification.affected_entities?.length ? (
               <div className="flex flex-wrap gap-1.5">
                 {classification.affected_entities.map((e) => (
-                  <span key={e} className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 font-mono text-xs text-sky-300">{e}</span>
+                  <EntityChip key={e} entity={e} match={resources.find((r) => (r.entity ?? r.name) === e.trim())} />
                 ))}
               </div>
             ) : (
@@ -160,7 +198,9 @@ function ReasoningPanel({
           )}
           <p className="flex gap-1.5 text-[11px] text-subtle">
             <Info className="mt-0.5 size-3 shrink-0" />
-            Model-generated classification. Entities are not yet verified against the inventory.
+            {resources.length
+              ? `Model-generated classification. ${resources.filter((r) => r.resolved).length} of ${resources.length} entities verified against the inventory.`
+              : "Model-generated classification. Entities are checked against the inventory once resolved."}
           </p>
         </div>
       )}
@@ -321,12 +361,15 @@ function ReportPanel({ inv }: { inv: InvestigationDetail }) {
           </div>
           <div>
             <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Root cause</div>
-            <p className="text-sm text-muted">{r.root_cause ?? "Not determined — no supporting evidence was collected."}</p>
+            <p className="text-sm text-muted">{r.root_cause ??
+              (r.evidence?.length
+                ? "Not determined. Inventory facts show the current state but cannot establish a cause; diagnostic agents arrive in Phase 4."
+                : "Not determined. No supporting evidence was collected.")}</p>
           </div>
           {!r.evidence_sufficient && (
             <Alert tone="warning">
-              Evidence is insufficient. Diagnostic agents that collect evidence from your infrastructure arrive in a
-              later release; until then reports state only what was classified and planned.
+              No inventory evidence was found for this request. Make sure the affected resources are discovered; log,
+              metric and root-cause agents arrive in a later release.
             </Alert>
           )}
         </div>
@@ -342,6 +385,39 @@ function ReportPanel({ inv }: { inv: InvestigationDetail }) {
               ))}
             </ol>
           </div>
+          {!!r.evidence?.length && (
+            <div>
+              <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Evidence ({r.evidence.length})</div>
+              <ul className="space-y-2">
+                {r.evidence.map((e, i) => (
+                  <li key={`${e.resource_id ?? e.resource}-${i}`} className="rounded-lg border border-border bg-surface-2 px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      {e.resource_id ? (
+                        <Link to={`/infrastructure/${e.resource_id}`} className="font-medium hover:underline">{e.resource}</Link>
+                      ) : (
+                        <span className="font-medium">{e.resource}</span>
+                      )}
+                      {e.health && <HealthBadge status={e.health} />}
+                      <span className="text-[11px] text-subtle">{e.source} · {agentLabel(e.agent)}{e.observed_at ? ` · ${formatRelative(e.observed_at)}` : ""}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-fg/80">{e.summary}</p>
+                    {!!e.findings?.length && (
+                      <ul className="mt-1 list-inside list-disc text-xs text-muted">
+                        {e.findings.map((f) => <li key={f}>{f}</li>)}
+                      </ul>
+                    )}
+                    {(!!e.depends_on?.length || !!e.dependents) && (
+                      <p className="mt-1 text-[11px] text-subtle">
+                        {e.depends_on?.length ? `Depends on ${e.depends_on.join(", ")}` : ""}
+                        {e.depends_on?.length && e.dependents ? " · " : ""}
+                        {e.dependents ? `${e.dependents} dependent resource${e.dependents === 1 ? "" : "s"}` : ""}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {!!r.clarifications?.length && (
             <div>
               <div className="mb-1 text-xs font-medium tracking-wide text-muted uppercase">Clarifications</div>
@@ -416,7 +492,7 @@ export function InvestigationWorkspace({ id, compact = false }: { id: string; co
       {inv.status === "awaiting_input" && canInvestigate && <ClarificationBox inv={inv} />}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)]">
-        <ReasoningPanel classification={classification} waiting={active} />
+        <ReasoningPanel classification={classification} waiting={active} resources={inv.result?.resources ?? []} />
         <Timeline events={events} state={state} />
         <PlanPanel tasks={tasks} waiting={active} />
       </div>

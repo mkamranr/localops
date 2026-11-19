@@ -6,6 +6,24 @@ import type {
   AgentExecution,
   AuditLog,
   DashboardSummary,
+  DependencyGraph,
+  DiscoveryRun,
+  HostKey,
+  Integration,
+  IntegrationCredentials,
+  IntegrationSettings,
+  IntegrationTestResult,
+  IntegrationType,
+  InventoryFacets,
+  InventorySummary,
+  MetricSample,
+  Relationship,
+  RelationshipType,
+  Resource,
+  ResourceEvent,
+  ResourceInput,
+  ResourceSummary,
+  Target,
   ExecutionMode,
   Investigation,
   InvestigationDetail,
@@ -173,4 +191,76 @@ export const investigationsApi = {
   resume: (id: string, answer: string) =>
     api.post<Investigation>(`/investigations/${id}/resume`, { answer }),
   cancel: (id: string) => api.post<Investigation>(`/investigations/${id}/cancel`),
+};
+
+// ------------------------------------------------------------------ inventory (Phase 3)
+
+export interface IntegrationInput {
+  name: string;
+  integration_type: IntegrationType;
+  description?: string;
+  configuration?: IntegrationSettings;
+  credentials?: IntegrationCredentials;
+  clear_credentials?: boolean;
+  targets?: Target[];
+  enabled?: boolean;
+  schedule_minutes?: number | null;
+  clear_schedule?: boolean;
+}
+
+export const integrationsApi = {
+  list: () => api.get<Integration[]>("/integrations"),
+  get: (id: string) => api.get<Integration>(`/integrations/${id}`),
+  create: (body: IntegrationInput) => api.post<Integration>("/integrations", body),
+  update: (id: string, body: Partial<IntegrationInput>) =>
+    api.put<Integration>(`/integrations/${id}`, body),
+  remove: (id: string) => api.delete(`/integrations/${id}`),
+  test: (id: string, target?: Target) =>
+    api.post<IntegrationTestResult>(`/integrations/${id}/test`, target ? { target } : {}),
+  discover: (id: string) => api.post<DiscoveryRun>(`/integrations/${id}/discover`),
+  runs: (id: string, page = 1, page_size = 10) =>
+    api.get<Page<DiscoveryRun>>(`/integrations/${id}/runs`, { page, page_size }),
+  run: (runId: string) => api.get<DiscoveryRun>(`/integrations/runs/${runId}`),
+  hostKeys: (id: string) => api.get<HostKey[]>(`/integrations/${id}/host-keys`),
+  resetHostKey: (id: string, keyId: string) => api.delete(`/integrations/${id}/host-keys/${keyId}`),
+};
+
+export interface ResourceQuery {
+  page: number;
+  page_size: number;
+  q?: string;
+  type?: string;
+  environment?: string;
+  health?: string;
+  group?: string;
+  tag?: string;
+  integration_id?: string;
+  stale?: boolean;
+}
+
+export const resourcesApi = {
+  list: (query: ResourceQuery) => api.get<Page<ResourceSummary>>("/resources", { ...query }),
+  summary: () => api.get<InventorySummary>("/resources/summary"),
+  facets: () => api.get<InventoryFacets>("/resources/facets"),
+  get: (id: string) => api.get<Resource>(`/resources/${id}`),
+  create: (body: ResourceInput) => api.post<Resource>("/resources", body),
+  update: (id: string, body: Partial<ResourceInput>) => api.put<Resource>(`/resources/${id}`, body),
+  remove: (id: string) => api.delete(`/resources/${id}`),
+  checkHealth: (id: string) => api.post<DiscoveryRun>(`/resources/${id}/health/check`),
+  history: (id: string, page = 1, page_size = 25) =>
+    api.get<Page<ResourceEvent>>(`/resources/${id}/history`, { page, page_size }),
+  metrics: (id: string, hours = 168) =>
+    api.get<MetricSample[]>(`/resources/${id}/metrics`, { hours }),
+  relationships: (id: string) => api.get<Relationship[]>(`/resources/${id}/relationships`),
+  dependencies: (id: string, direction: "up" | "down" | "both" = "both", depth = 3) =>
+    api.get<DependencyGraph>(`/resources/${id}/dependencies`, { direction, depth }),
+  graph: (query: { environment?: string; group?: string; type?: string; include_stale?: boolean }) =>
+    api.get<DependencyGraph>("/resources/graph", { ...query }),
+  addRelationship: (body: {
+    source_id: string;
+    target_id: string;
+    relationship_type: RelationshipType;
+    description?: string;
+  }) => api.post<Relationship>("/resource-relationships", body),
+  removeRelationship: (id: string) => api.delete(`/resource-relationships/${id}`),
 };

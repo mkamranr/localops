@@ -193,7 +193,9 @@ async def _run(rt: InvestigationRuntime, settings: Settings, resume: str | None)
             result=report,
             request_type=(values.get("classification") or {}).get("request_type"),
             investigation_type=(values.get("classification") or {}).get("request_type"),
-            resource_ids=[],
+            resource_ids=[
+                r["resource_id"] for r in values.get("resources", []) if r.get("resolved")
+            ],
             completed_at=datetime.now(UTC),
         )
         return "completed"

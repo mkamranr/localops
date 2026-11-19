@@ -11,7 +11,16 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis.asyncio import ConnectionPool, Redis
 
-from app.api.v1 import ai, auth, investigations, system, tenants, users
+from app.api.v1 import (
+    ai,
+    auth,
+    integrations,
+    investigations,
+    resources,
+    system,
+    tenants,
+    users,
+)
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -65,7 +74,7 @@ def create_app(
     register_exception_handlers(app)
 
     v1 = APIRouter(prefix=API_PREFIX)
-    for module in (system, auth, tenants, users, ai, investigations):
+    for module in (system, auth, tenants, users, ai, investigations, resources, integrations):
         v1.include_router(module.router)
     app.include_router(v1)
 

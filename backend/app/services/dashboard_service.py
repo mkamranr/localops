@@ -6,7 +6,15 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import case, func, select
 
-from app.models import ACTIVE_STATUSES, AgentExecution, AuditLog, Investigation, ModelEndpoint, User
+from app.models import (
+    ACTIVE_STATUSES,
+    AgentExecution,
+    AuditLog,
+    Investigation,
+    ModelEndpoint,
+    Resource,
+    User,
+)
 from app.schemas.audit import (
     ActivitySummary,
     CountSummary,
@@ -67,12 +75,22 @@ async def summary(ctx: RequestContext, services: list[ServiceHealth]) -> Dashboa
         )
     )
 
+    res = (
+        await s.execute(
+            select(
+                func.count(),
+                func.count().filter(Resource.health_status.in_(("healthy", "degraded"))),
+                func.count().filter(Resource.health_status == "unhealthy"),
+            ).where(Resource.stale.is_(False))
+        )
+    ).one()
+
     return DashboardSummary(
         tenant=ctx.principal.tenant_slug,
         users=UserSummary(total=u[0], active=u[1], disabled=u[2]),
         activity=ActivitySummary(events_24h=a[0], logins_24h=a[1], failed_logins_24h=a[2]),
         services=services,
-        resources=CountSummary(),
+        resources=CountSummary(total=res[0], online=res[1], offline=res[2]),
         incidents=IncidentSummary(),
         active_investigations=inv[0],
         investigations_24h=inv[1],

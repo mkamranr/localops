@@ -50,8 +50,8 @@ export const NAVIGATION: NavGroup[] = [
   {
     label: "Infrastructure",
     items: [
-      { label: "Infrastructure", path: "/infrastructure", icon: Server, permission: "resource.read", phase: 3 },
-      { label: "Dependencies", path: "/dependencies", icon: Network, permission: "resource.read", phase: 3 },
+      { label: "Infrastructure", path: "/infrastructure", icon: Server, permission: "resource.read" },
+      { label: "Dependencies", path: "/dependencies", icon: Network, permission: "resource.read" },
     ],
   },
   {
@@ -59,7 +59,7 @@ export const NAVIGATION: NavGroup[] = [
     items: [
       { label: "Knowledge Base", path: "/knowledge", icon: BookOpen, permission: "knowledge.read", phase: 6 },
       { label: "Agents", path: "/agents", icon: Bot, permission: "agent.read" },
-      { label: "Tools & Integrations", path: "/integrations", icon: Plug, permission: "integration.read", phase: 6 },
+      { label: "Tools & Integrations", path: "/integrations", icon: Plug, permission: "integration.read" },
     ],
   },
   {

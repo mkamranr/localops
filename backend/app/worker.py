@@ -1,8 +1,9 @@
 """Background worker (arq, Redis-backed).
 
-Runs investigation graphs and a heartbeat cron. On startup it verifies the
-checkpoint schema and re-enqueues investigations that were queued or running when
-the previous worker stopped; each run resumes from its last persisted checkpoint.
+Runs investigation graphs, infrastructure discovery runs, the discovery scheduler
+(every minute) and a heartbeat cron. On startup it verifies the checkpoint schema and
+re-enqueues investigations that were queued or running when the previous worker
+stopped; each run resumes from its last persisted checkpoint.
 
 Run:   arq app.worker.WorkerSettings
 Check: arq --check app.worker.WorkerSettings
@@ -28,8 +29,10 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import global_key
 from app.database.session import dispose_engine, get_engine, init_engine
+from app.discovery.engine import run_discovery
+from app.discovery.scheduler import schedule_due
 from app.graphs.checkpointer import verify_checkpoint_schema
-from app.graphs.dispatch import JOB_NAME, QUEUE_NAME, ArqDispatcher
+from app.graphs.dispatch import DISCOVERY_JOB, JOB_NAME, QUEUE_NAME, ArqDispatcher
 from app.graphs.runner import InvestigationLockedError, run_investigation
 
 log = get_logger("localops.worker")
@@ -53,6 +56,19 @@ async def run_investigation_job(
     except InvestigationLockedError:
         # Another worker holds the run lock (or a crashed one's lock is expiring).
         raise Retry(defer=20) from None
+
+
+async def run_discovery_job(ctx: dict[str, Any], tenant_id: str, run_id: str) -> str:
+    return await run_discovery(
+        get_settings(),
+        tenant_id=uuid.UUID(tenant_id),
+        run_id=uuid.UUID(run_id),
+        redis=ctx["redis"],
+    )
+
+
+async def discovery_scheduler(ctx: dict[str, Any]) -> int:
+    return await schedule_due(ArqDispatcher(ctx["redis"]))
 
 
 async def recover(ctx: dict[str, Any]) -> int:
@@ -91,8 +107,14 @@ def _job_timeout() -> int:
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     queue_name = QUEUE_NAME
-    functions: ClassVar[list[Any]] = [func(run_investigation_job, name=JOB_NAME)]
-    cron_jobs: ClassVar[list[Any]] = [cron(heartbeat, second={0}, run_at_startup=True)]
+    functions: ClassVar[list[Any]] = [
+        func(run_investigation_job, name=JOB_NAME),
+        func(run_discovery_job, name=DISCOVERY_JOB, max_tries=1, timeout=3600),
+    ]
+    cron_jobs: ClassVar[list[Any]] = [
+        cron(heartbeat, second={0}, run_at_startup=True),
+        cron(discovery_scheduler, second={30}, run_at_startup=False, unique=True),
+    ]
     on_startup = startup
     on_shutdown = shutdown
     health_check_interval = 30

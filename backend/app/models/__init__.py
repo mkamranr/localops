@@ -20,6 +20,15 @@ from app.models.identity import (
     User,
     UserRole,
 )
+from app.models.inventory import (
+    DiscoveryRun,
+    Integration,
+    Resource,
+    ResourceEvent,
+    ResourceMetricSample,
+    ResourceRelationship,
+    SshHostKey,
+)
 
 __all__ = [
     "ACTIVE_STATUSES",
@@ -28,13 +37,20 @@ __all__ = [
     "Agent",
     "AgentExecution",
     "AuditLog",
+    "DiscoveryRun",
+    "Integration",
     "Investigation",
     "InvestigationEvent",
     "ModelEndpoint",
     "Permission",
     "RefreshToken",
+    "Resource",
+    "ResourceEvent",
+    "ResourceMetricSample",
+    "ResourceRelationship",
     "Role",
     "RolePermission",
+    "SshHostKey",
     "Tenant",
     "User",
     "UserRole",

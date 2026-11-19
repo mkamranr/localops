@@ -3,11 +3,14 @@
 **Open-source, AI-powered infrastructure operations and autonomous troubleshooting platform.**
 Self-hosted, multi-tenant, and designed to run in connected or fully air-gapped environments.
 
-> Status: **Phase 2 – AI Orchestration** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
-> Phase 1 (authentication, tenants, RBAC, audit, dashboard, Compose deployment) plus the model
-> gateway (Ollama, vLLM, llama.cpp, any OpenAI-compatible server), agent registry, Supervisor
-> agent, LangGraph investigations with PostgreSQL checkpointing, and live SSE progress.
-> Infrastructure discovery and diagnostic agents arrive in Phases 3–4.
+> Status: **Phase 3 – Infrastructure Discovery** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
+> Phase 1 (authentication, tenants, RBAC, audit, dashboard, Compose deployment), Phase 2 (model
+> gateway for Ollama, vLLM, llama.cpp and any OpenAI-compatible server; agent registry;
+> Supervisor; LangGraph investigations with PostgreSQL checkpointing; live SSE progress), and
+> Phase 3: read-only discovery of Linux (SSH), Windows (WinRM), Docker and HTTP endpoints;
+> resource inventory with health, history and metrics; scheduled discovery; relationships;
+> dependency and blast-radius visualisation; inventory-verified investigations.
+> Diagnostic agents arrive in Phase 4.
 
 ## Quick start (Docker Compose)
 
@@ -22,7 +25,8 @@ Open `http://<host>:8300` and sign in with tenant **`system`**, username `admin`
 `BOOTSTRAP_ADMIN_PASSWORD`. You'll be asked to change the password at first sign-in.
 
 Then add a model under **Settings → AI Models** (or set `LLM_BASE_URL`/`LLM_MODEL` in `.env`
-before the first start) and open **AI Assistant**.
+before the first start), add hosts under **Tools & Integrations** (set `LOCALOPS_ENCRYPTION_KEY`
+first), and open **AI Assistant**.
 
 See [docs/installation.md](docs/installation.md) and [docs/ai.md](docs/ai.md) for details.
 

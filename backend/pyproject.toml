@@ -25,6 +25,8 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
     "cryptography>=44",
+    "asyncssh>=2.18",
+    "pywinrm>=0.5",
 ]
 
 [dependency-groups]
@@ -48,7 +50,7 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "N", "SIM"]
 ignore = ["B008", "SIM108"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]
+"tests/**" = ["S101", "S104", "S105", "S106"]
 "migrations/**" = ["E501", "S608"]
 
 [tool.mypy]

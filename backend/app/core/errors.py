@@ -60,6 +60,11 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class ValidationFailedError(AppError):
+    status_code = 422
+    code = "validation_error"
+
+
 class RateLimitedError(AppError):
     status_code = 429
     code = "rate_limited"
