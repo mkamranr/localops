@@ -117,6 +117,7 @@ export interface ModelSettings {
   max_retries?: number;
   structured_output?: "json_schema" | "json_object" | "none";
   context_window?: number | null;
+  thinking?: "auto" | "enabled" | "disabled";
 }
 
 export interface ModelEndpoint {

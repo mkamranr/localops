@@ -50,6 +50,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
     timeout_seconds: String(model?.configuration.timeout_seconds ?? 120),
     max_retries: String(model?.configuration.max_retries ?? 2),
     structured_output: model?.configuration.structured_output ?? "json_object",
+    thinking: model?.configuration.thinking ?? "auto",
     api_key: "",
     clear_api_key: false,
     is_default: model?.is_default ?? false,
@@ -67,6 +68,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
           timeout_seconds: Number(form.timeout_seconds),
           max_retries: Number(form.max_retries),
           structured_output: form.structured_output,
+          thinking: form.thinking,
         },
         is_default: form.is_default,
       };
@@ -135,6 +137,17 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
             </Select>
           </Field>
         </div>
+        <Field
+          label="Reasoning (thinking)"
+          htmlFor="m-thinking"
+          hint="Thinking models write their reasoning before the answer. 'Disabled' asks the server to switch it off (vLLM/SGLang/llama.cpp chat-template flag, Ollama think=false, Qwen3 /no_think); servers that ignore it still work."
+        >
+          <Select id="m-thinking" value={form.thinking} onChange={set("thinking")}>
+            <option value="auto">Auto: allow room for reasoning</option>
+            <option value="enabled">Always thinks: larger token budget</option>
+            <option value="disabled">Disable thinking where supported</option>
+          </Select>
+        </Field>
         <Field label="API key (optional)" htmlFor="m-key" hint={model?.has_api_key ? "A key is stored (encrypted). Leave blank to keep it." : "Stored encrypted with LOCALOPS_ENCRYPTION_KEY."}>
           <Input id="m-key" type="password" value={form.api_key} onChange={set("api_key")} autoComplete="new-password" />
         </Field>

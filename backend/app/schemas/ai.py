@@ -33,6 +33,9 @@ class ModelSettings(BaseModel):
     max_retries: int = Field(2, ge=0, le=5)
     structured_output: Literal["json_schema", "json_object", "none"] = "json_object"
     context_window: int | None = Field(None, ge=512, le=2_000_000)
+    # "auto": allow for reasoning output; "enabled": the model always thinks (bigger
+    # budget); "disabled": ask the server to switch reasoning off where supported.
+    thinking: Literal["auto", "enabled", "disabled"] = "auto"
 
 
 class ModelEndpointCreate(BaseModel):

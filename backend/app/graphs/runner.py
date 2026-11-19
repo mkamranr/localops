@@ -203,7 +203,8 @@ async def _run(rt: InvestigationRuntime, settings: Settings, resume: str | None)
     except TimeoutError:
         return await _failed(rt, "Investigation exceeded its time limit")
     except (AgentUnavailableError, ModelError, AppError) as exc:
-        return await _failed(rt, str(exc))
+        detail = exc.detail if isinstance(exc, ModelError) else None
+        return await _failed(rt, str(exc), detail=detail)
     except Exception as exc:
         log.exception("investigation_crashed", investigation_id=str(rt.investigation_id))
         return await _failed(rt, f"Internal error ({type(exc).__name__})")
@@ -231,14 +232,16 @@ async def _cancelled(rt: InvestigationRuntime) -> None:
     )
 
 
-async def _failed(rt: InvestigationRuntime, message: str) -> str:
+async def _failed(rt: InvestigationRuntime, message: str, *, detail: str | None = None) -> str:
+    # The model-output excerpt is shown to operators but kept out of the logs.
     log.warning("investigation_failed", investigation_id=str(rt.investigation_id), error=message)
+    full = f"{message}\nModel output began: {detail}" if detail else message
     await _transition(
         rt,
         event_type="investigation.failed",
-        data={"error": message[:500]},
+        data={"error": full[:900]},
         status="failed",
-        error=message[:1000],
+        error=full[:1000],
         completed_at=datetime.now(UTC),
     )
     return "failed"

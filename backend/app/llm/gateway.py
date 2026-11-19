@@ -41,6 +41,11 @@ MODEL_TOKENS = Counter("localops_model_tokens_total", "Model tokens", ["provider
 
 Provider = Literal["vllm", "ollama", "llamacpp", "openai_compatible"]
 StructuredMode = Literal["json_schema", "json_object", "none"]
+ThinkingMode = Literal["auto", "enabled", "disabled"]
+
+# Extra completion tokens reserved for the reasoning of thinking models.
+THINKING_HEADROOM = 4096
+MAX_STRUCTURED_TOKENS = 8192
 
 # Allows tests (and future in-process runtimes) to inject an httpx transport.
 _transport_override: httpx.AsyncBaseTransport | None = None
@@ -54,9 +59,12 @@ def set_transport_override(transport: httpx.AsyncBaseTransport | None) -> None:
 class ModelError(Exception):
     """A model call failed (unreachable, HTTP error, unusable output)."""
 
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, detail: str | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
+        # Excerpt of model output shown to operators (stored with the investigation,
+        # never logged).
+        self.detail = detail
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +78,7 @@ class EndpointConfig:
     max_retries: int = 2
     structured_output: StructuredMode = "json_object"
     context_window: int | None = None
+    thinking: ThinkingMode = "auto"
 
     @property
     def api_base(self) -> str:
@@ -104,6 +113,7 @@ class EndpointConfig:
             max_retries=int(cfg.get("max_retries", 2)),
             structured_output=cfg.get("structured_output", "json_object"),
             context_window=cfg.get("context_window"),
+            thinking=cfg.get("thinking", "auto"),
         )
 
 
@@ -162,6 +172,22 @@ def extract_json(text: str) -> Any:
     Handles reasoning blocks (``<think>``), markdown fences and leading/trailing prose.
     """
     cleaned = _THINK.sub("", text).strip()
+    lowered = cleaned.lower()
+    if "</think>" in lowered and "<think>" not in lowered:
+        # Templates that open the reasoning block in the prompt (Qwen3, DeepSeek-R1)
+        # return only its closing tag.
+        cleaned = cleaned[lowered.rfind("</think>") + len("</think>") :].strip()
+        lowered = cleaned.lower()
+    if "<think>" in lowered and "</think>" not in lowered:
+        head, tail = (
+            cleaned[: lowered.rfind("<think>")].strip(),
+            cleaned[lowered.rfind("<think>") :],
+        )
+        if not head and "{" not in tail:
+            raise ValueError("reply ended inside a <think> reasoning block before any JSON")
+        cleaned = head or tail
+    if not cleaned:
+        raise ValueError("reply was empty (the model may have used its whole budget thinking)")
     fenced = _FENCE.search(cleaned)
     if fenced:
         cleaned = fenced.group(1).strip()
@@ -191,6 +217,88 @@ def extract_json(text: str) -> Any:
             if depth == 0:
                 return json.loads(cleaned[start : i + 1])
     raise ValueError("Unterminated JSON object in model output")
+
+
+def _thinking_extras(ep: EndpointConfig) -> dict[str, Any]:
+    """Request-level switches that turn reasoning off on common servers."""
+    if ep.thinking != "disabled":
+        return {}
+    if ep.provider == "ollama":
+        return {"think": False}
+    # vLLM / SGLang / llama.cpp server pass these to the chat template (Qwen3 etc.).
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def _with_no_think(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Append Qwen3's ``/no_think`` soft switch to the last user message."""
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].role == "user":
+            out[i] = ChatMessage("user", out[i].content.rstrip() + "\n/no_think")
+            break
+    return out
+
+
+def describe_schema(schema: dict[str, Any]) -> str:
+    """Human-readable field list for a Pydantic JSON Schema (top level)."""
+    defs = schema.get("$defs", {})
+    required = set(schema.get("required", []))
+    lines = []
+    for name, prop in schema.get("properties", {}).items():
+        suffix = "" if name in required else " (optional)"
+        lines.append(f"- {name}: {_describe_type(prop, defs)}{suffix}")
+    return "\n".join(lines)
+
+
+def _describe_type(prop: dict[str, Any], defs: dict[str, Any]) -> str:
+    if "$ref" in prop:
+        target = defs.get(prop["$ref"].split("/")[-1], {})
+        if target.get("properties"):
+            inner = ", ".join(
+                f"{k} ({_describe_type(v, defs)})" for k, v in target["properties"].items()
+            )
+            return f"object with {inner}"
+        return _describe_type(target, defs)
+    if "enum" in prop:
+        return "one of " + ", ".join(json.dumps(v) for v in prop["enum"])
+    if "anyOf" in prop:
+        kinds = [_describe_type(p, defs) for p in prop["anyOf"]]
+        return " or ".join(dict.fromkeys(kinds))
+    kind = prop.get("type", "any")
+    if kind == "array":
+        return f"array of {_describe_type(prop.get('items', {}), defs)}"
+    names = {
+        "string": "string",
+        "number": "number",
+        "integer": "integer",
+        "boolean": "true or false",
+        "null": "null",
+        "object": "object",
+    }
+    base = names.get(kind, str(kind))
+    desc = prop.get("description")
+    return f"{base} ({desc})" if desc else base
+
+
+def unwrap_object(data: Any, expected: set[str]) -> Any:
+    """Undo common wrappers such as ``[{...}]`` or ``{"Classification": {...}}``."""
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
+        data = data[0]
+    for _ in range(2):
+        if (
+            isinstance(data, dict)
+            and expected
+            and not (expected & set(data))
+            and len(data) == 1
+            and isinstance(next(iter(data.values())), dict)
+        ):
+            data = next(iter(data.values()))
+    return data
+
+
+def _output_excerpt(content: str, limit: int = 300) -> str:
+    text = " ".join(content.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _compact_errors(err: ValidationError) -> str:
@@ -246,6 +354,8 @@ class ModelClient:
         }
         if response_format:
             payload["response_format"] = response_format
+        extras = _thinking_extras(ep)
+        payload.update(extras)
 
         attempts = ep.max_retries + 1
         last_error: ModelError | None = None
@@ -255,6 +365,14 @@ class ModelClient:
                 async with self._client(request_timeout) as client:
                     resp = await client.post(f"{ep.api_base}/chat/completions", json=payload)
                 elapsed = time.perf_counter() - start
+                if resp.status_code == 400 and extras and any(k in payload for k in extras):
+                    # Strict servers reject unknown fields; retry once without them.
+                    log.info("model_thinking_hint_rejected", model=ep.model)
+                    for key in extras:
+                        payload.pop(key, None)
+                    async with self._client(request_timeout) as client:
+                        resp = await client.post(f"{ep.api_base}/chat/completions", json=payload)
+                    elapsed = time.perf_counter() - start
                 if resp.status_code == 429 or resp.status_code >= 500:
                     raise ModelError(
                         f"Model endpoint returned HTTP {resp.status_code}", retryable=True
@@ -266,7 +384,10 @@ class ModelClient:
                     )
                 data = resp.json()
                 choice = (data.get("choices") or [{}])[0]
-                content = (choice.get("message") or {}).get("content") or ""
+                message = choice.get("message") or {}
+                # Reasoning servers (vLLM, SGLang, LM Studio, Ollama) may return the
+                # chain of thought separately; only ``content`` is the answer.
+                content = message.get("content") or ""
                 usage_raw = data.get("usage") or {}
                 usage = Usage(
                     prompt_tokens=int(usage_raw.get("prompt_tokens") or 0),
@@ -309,62 +430,84 @@ class ModelClient:
         *,
         temperature: float = 0.1,
         max_tokens: int = 1024,
-        repair_attempts: int = 1,
+        repair_attempts: int = 2,
         request_timeout: float | None = None,
+        example: dict[str, Any] | None = None,
     ) -> StructuredResult[T]:
         """Request a JSON object matching ``schema`` and validate it.
 
-        Invalid output is sent back to the model with the validation errors, up to
-        ``repair_attempts`` times. The model never gets to decide anything that
-        bypasses this validation.
+        Local models follow a field list and a concrete example far better than a raw
+        JSON Schema. Invalid output is sent back with the problems, up to
+        ``repair_attempts`` times; output cut off by the token limit (typical for
+        thinking models) is retried with a larger budget. Nothing bypasses validation.
         """
+        ep = self.endpoint
         json_schema = schema.model_json_schema()
-        mode = self.endpoint.structured_output
         response_format: dict[str, Any] | None = None
-        if mode == "json_schema":
+        if ep.structured_output == "json_schema":
             response_format = {
                 "type": "json_schema",
                 "json_schema": {"name": schema.__name__, "schema": json_schema, "strict": False},
             }
-        elif mode == "json_object":
+        elif ep.structured_output == "json_object":
             response_format = {"type": "json_object"}
 
         instruction = (
-            "Respond with a single JSON object only, no prose and no markdown, that validates "
-            f"against this JSON Schema:\n{json.dumps(json_schema, separators=(',', ':'))}"
+            "Output format: after any reasoning, reply with ONE JSON object and nothing "
+            "else - no prose, no markdown, no code fences, and do not repeat this "
+            f"description.\nFields:\n{describe_schema(json_schema)}"
         )
+        if example is not None:
+            instruction += f"\nExample of the expected shape:\n{json.dumps(example)}"
         convo = [*messages, ChatMessage("system", instruction)]
+        if ep.thinking == "disabled":
+            convo = _with_no_think(convo)
+        budget = max_tokens
+        if ep.thinking != "disabled":
+            # A completion limit is a ceiling, not a target: generous headroom costs
+            # nothing for plain models and stops reasoning models being cut off.
+            budget = max(budget, THINKING_HEADROOM)
+        if ep.thinking == "enabled":
+            budget += THINKING_HEADROOM
         total = Usage()
+        problem = "no output"
+        content = ""
         for attempt in range(1, repair_attempts + 2):
             result = await self.chat(
                 convo,
                 temperature=temperature,
-                max_tokens=max_tokens,
+                max_tokens=budget,
                 response_format=response_format,
                 request_timeout=request_timeout,
             )
             total.add(result.usage)
+            content = result.content
             try:
-                value = schema.model_validate(extract_json(result.content))
+                data = unwrap_object(extract_json(content), set(json_schema.get("properties", {})))
+                value = schema.model_validate(data)
                 return StructuredResult(value=value, usage=total, attempts=attempt)
             except (ValueError, ValidationError) as exc:
                 problem = _compact_errors(exc) if isinstance(exc, ValidationError) else str(exc)
+                if result.finish_reason == "length":
+                    problem = f"reply was cut off at the {budget}-token limit; {problem}"
+                    budget = min(budget * 2, MAX_STRUCTURED_TOKENS)
                 log.info(
-                    "model_output_invalid",
-                    model=self.endpoint.model,
-                    attempt=attempt,
-                    problem=problem[:300],
+                    "model_output_invalid", model=ep.model, attempt=attempt, problem=problem[:300]
                 )
                 convo = [
                     *convo,
-                    ChatMessage("assistant", result.content[:4000]),
+                    ChatMessage("assistant", _THINK.sub("", content)[:4000] or "(empty)"),
                     ChatMessage(
                         "user",
-                        f"That output was invalid ({problem}). Reply again with only the "
-                        "corrected JSON object.",
+                        f"That reply was not valid ({problem}). Reply again with only the "
+                        "corrected JSON object containing the listed fields.",
                     ),
                 ]
-        raise ModelError("Model did not return valid structured output")
+        raise ModelError(
+            f"Model '{ep.model}' did not return valid structured output after "
+            f"{repair_attempts + 1} attempts: {problem[:300]}",
+            detail=_output_excerpt(content),
+        )
 
     async def health(self, *, probe: str | None = "Reply with the single word OK.") -> HealthResult:
         """List models and optionally run a tiny completion."""

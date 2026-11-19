@@ -177,3 +177,30 @@ def test_sanitise_plan_limits_and_dedupes() -> None:
         ("network_diagnostics", "o0"),
         ("network_diagnostics", "o1"),
     ]
+
+
+def test_classification_is_lenient() -> None:
+    from app.agents.supervisor import Classification, TaskPlan
+
+    c = Classification.model_validate(
+        {
+            "request_type": "Incident Investigation",
+            "urgency": "HIGH",
+            "affected_entities": "web-01, db-01",
+            "symptoms": None,
+            "needs_clarification": "false",
+            "confidence": "85%",
+        }
+    )
+    assert c.request_type == "incident_investigation"
+    assert c.urgency == "high"
+    assert c.affected_entities == ["web-01", "db-01"]
+    assert c.symptoms == []
+    assert c.needs_clarification is False
+    assert c.confidence == pytest.approx(0.85)
+    assert c.summary
+    assert Classification.model_validate({"request_type": "outage"}).request_type == (
+        "incident_investigation"
+    )
+    plan = TaskPlan.model_validate([{"agent": "x", "objective": "y"}])
+    assert len(plan.tasks) == 1

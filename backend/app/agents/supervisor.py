@@ -6,9 +6,10 @@ the plan is filtered to known agent types before anything acts on it.
 
 from __future__ import annotations
 
-from typing import Literal
+import re
+from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.agents.catalogue import CATALOGUE, SPECIALIST_TYPES
 from app.llm.gateway import ChatMessage
@@ -23,6 +24,47 @@ RequestType = Literal[
     "general_question",
 ]
 Urgency = Literal["low", "medium", "high", "critical"]
+
+
+_REQUEST_SYNONYMS = {
+    "incident": "incident_investigation",
+    "investigation": "incident_investigation",
+    "troubleshooting": "incident_investigation",
+    "outage": "incident_investigation",
+    "health": "health_check",
+    "status": "health_check",
+    "change": "change_impact",
+    "impact": "change_impact",
+    "remediation": "remediation_request",
+    "fix": "remediation_request",
+    "knowledge": "knowledge_query",
+    "documentation": "knowledge_query",
+    "inventory": "inventory_query",
+    "question": "general_question",
+    "general": "general_question",
+}
+_URGENCY_SYNONYMS = {"urgent": "high", "normal": "medium", "moderate": "medium", "p1": "critical"}
+
+
+def _choice(value: object, allowed: tuple[str, ...], synonyms: dict[str, str]) -> object:
+    """Map near-misses ("High", "Incident Investigation", "incident") onto an enum value."""
+    if not isinstance(value, str):
+        return value
+    key = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+    if key in allowed:
+        return key
+    for word, target in synonyms.items():
+        if word in key.split("_"):
+            return target
+    return value
+
+
+def _as_list(value: object) -> object:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in re.split(r"[,;\n]", value) if part.strip()]
+    return value
 
 
 def _clip(value: str, limit: int) -> str:
@@ -43,6 +85,33 @@ class Classification(BaseModel):
     clarification_question: str | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _lenient(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        data["request_type"] = _choice(
+            data.get("request_type") or "general_question",
+            get_args(RequestType),
+            _REQUEST_SYNONYMS,
+        )
+        if data.get("urgency") is not None:
+            data["urgency"] = _choice(data["urgency"], get_args(Urgency), _URGENCY_SYNONYMS)
+        else:
+            data.pop("urgency", None)
+        for key in ("affected_entities", "symptoms"):
+            data[key] = _as_list(data.get(key))
+        if not data.get("summary"):
+            data["summary"] = "(no summary provided)"
+        if isinstance(data.get("needs_clarification"), str):
+            data["needs_clarification"] = data["needs_clarification"].strip().lower() in {
+                "true",
+                "yes",
+                "1",
+            }
+        return data
+
     @field_validator("summary")
     @classmethod
     def _summary(cls, v: str) -> str:
@@ -61,9 +130,18 @@ class Classification(BaseModel):
     @field_validator("confidence", mode="before")
     @classmethod
     def _confidence(cls, v: object) -> object:
+        if isinstance(v, str):
+            text = v.strip().rstrip("%")
+            try:
+                v = float(text) / (100 if v.strip().endswith("%") else 1)
+            except ValueError:
+                return {"low": 0.3, "medium": 0.6, "high": 0.9}.get(text.lower(), 0.5)
         if isinstance(v, (int, float)):
-            return min(max(float(v), 0.0), 1.0)
-        return v
+            value = float(v)
+            if value > 1.0 and value <= 100.0:
+                value /= 100  # "85" meaning 85 %
+            return min(max(value, 0.0), 1.0)
+        return v if v is not None else 0.5
 
 
 class PlannedTask(BaseModel):
@@ -79,6 +157,39 @@ class PlannedTask(BaseModel):
 
 class TaskPlan(BaseModel):
     tasks: list[PlannedTask] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lenient(cls, data: Any) -> Any:
+        if isinstance(data, list):  # a bare list of tasks
+            return {"tasks": data}
+        if isinstance(data, dict) and "tasks" not in data:
+            for key in ("plan", "steps", "task_list"):
+                if isinstance(data.get(key), list):
+                    return {"tasks": data[key]}
+        return data
+
+
+CLASSIFICATION_EXAMPLE: dict[str, Any] = {
+    "request_type": "incident_investigation",
+    "summary": "The web application on app-server-01 is returning errors since 09:00.",
+    "affected_entities": ["app-server-01"],
+    "symptoms": ["HTTP 500 errors"],
+    "urgency": "high",
+    "needs_clarification": False,
+    "clarification_question": None,
+    "confidence": 0.8,
+}
+
+PLAN_EXAMPLE: dict[str, Any] = {
+    "tasks": [
+        {
+            "agent": "infrastructure_diagnostics",
+            "objective": "Check CPU, memory and disk usage on app-server-01",
+            "rationale": "Resource exhaustion is a common cause of errors",
+        }
+    ]
+}
 
 
 _AGENT_LINES = "\n".join(f"- {a.agent_type}: {a.description}" for a in CATALOGUE if a.specialist)

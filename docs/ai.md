@@ -30,9 +30,22 @@ downloads and no telemetry.
 - **Resilience.** Per-endpoint timeout. Retries with exponential backoff on connection errors, 429
   and 5xx. 4xx errors are not retried.
 - **Structured output.** Requests a JSON object (`json_object`, `json_schema` or prompt-only, per
-  endpoint), strips `<think>` blocks and code fences, then validates against a Pydantic schema. If
-  validation fails, the error is fed back to the model once to repair. Invalid output never
-  reaches the graph.
+  endpoint). The prompt gives a plain field list and an example rather than a raw JSON Schema.
+  Reasoning (`<think>…</think>`, a lone `</think>`, or a separate `reasoning_content` field) and
+  code fences are stripped, then the reply is validated against a Pydantic schema. Near-miss
+  values such as `"High"` or `"incident"` are normalised. If validation fails, the problem is fed
+  back to the model up to twice. Invalid output never reaches the graph. On failure, the
+  investigation error names the problem and shows the first 300 characters of the reply. That
+  excerpt is not logged.
+- **Thinking models.** Each endpoint has a *Reasoning* setting (Settings → AI Models):
+  - `auto` (default): structured calls allow at least 4096 completion tokens. If a reply is
+    cut off (`finish_reason=length`), it is retried with double the budget, up to 8192.
+  - `enabled`: adds a further 4096 tokens for models that always think at length.
+  - `disabled`: asks the server to turn reasoning off.
+    - vLLM, SGLang and llama.cpp: `chat_template_kwargs.enable_thinking=false`.
+    - Ollama: `think=false`.
+    - Qwen3: also appends the `/no_think` hint.
+    - If a server rejects the extra field with HTTP 400, the request is retried without it.
 - **Accounting.** Prompt and completion tokens, call counts and latency go to Prometheus
   (`localops_model_*`) and to each agent execution record. Prompt and completion *content* is
   never logged.

@@ -152,6 +152,8 @@ class InvestigationRuntime:
         binding: AgentBinding,
         messages: list[ChatMessage],
         schema: type[T],
+        *,
+        example: dict[str, Any] | None = None,
     ) -> T:
         if binding.endpoint is None:
             raise AgentUnavailableError(
@@ -167,6 +169,7 @@ class InvestigationRuntime:
                 schema,
                 temperature=float(binding.config["temperature"]),
                 max_tokens=int(binding.config["max_tokens"]),
+                example=example,
             )
         except ModelError:
             call.usage.calls += 1

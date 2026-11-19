@@ -103,6 +103,7 @@ def build_graph(
             binding,
             supervisor.classify_messages(state["request"], state.get("clarifications", [])),
             supervisor.Classification,
+            example=supervisor.CLASSIFICATION_EXAMPLE,
         )
         data = result.model_dump()
         await rt.emit("supervisor.classified", "supervisor", data)
@@ -144,6 +145,7 @@ def build_graph(
             binding,
             supervisor.plan_messages(state["request"], classification, state.get("resources", [])),
             supervisor.TaskPlan,
+            example=supervisor.PLAN_EXAMPLE,
         )
         tasks = [
             {"id": f"task-{i + 1}", **t.model_dump()}
