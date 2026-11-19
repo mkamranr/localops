@@ -178,6 +178,9 @@ class ToolOut(BaseModel):
     timeout_seconds: int
     resource_types: list[str]
     input_schema: dict[str, Any]
+    kind: str = "read"
+    permission: str = "tool.execute.readonly"
+    verify_with: list[str] = Field(default_factory=list)
 
 
 class ToolRunRequest(BaseModel):

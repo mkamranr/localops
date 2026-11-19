@@ -37,16 +37,27 @@ from app.models.inventory import (
     ResourceRelationship,
     SshHostKey,
 )
+from app.models.remediation import (
+    APPROVAL_STATUSES,
+    RISK_LEVELS,
+    Approval,
+    ExecutionJob,
+    Policy,
+)
 
 __all__ = [
     "ACTIVE_STATUSES",
+    "APPROVAL_STATUSES",
     "OPEN_STATUSES",
+    "RISK_LEVELS",
     "SYSTEM_TENANT_SLUG",
     "TERMINAL_STATUSES",
     "Agent",
     "AgentExecution",
+    "Approval",
     "AuditLog",
     "DiscoveryRun",
+    "ExecutionJob",
     "Incident",
     "IncidentEvent",
     "IncidentResource",
@@ -55,6 +66,7 @@ __all__ = [
     "InvestigationEvent",
     "ModelEndpoint",
     "Permission",
+    "Policy",
     "RefreshToken",
     "Resource",
     "ResourceEvent",

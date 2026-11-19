@@ -7,6 +7,7 @@ import { resourcesApi } from "@/api/endpoints";
 import { DependencyGraphView } from "@/components/inventory/DependencyGraphView";
 import { ResourceIncidents, ResourceLogs } from "@/components/inventory/ResourceDiagnostics";
 import { ResourceDialog } from "@/components/inventory/ResourceDialog";
+import { ResourceRemediation } from "@/components/remediation/History";
 import { HealthBadge, percentTone, RELATIONSHIP_META, Sparkline, TYPE_META, TypeIcon } from "@/components/inventory/shared";
 import { Button } from "@/components/ui/button";
 import { Alert, Badge, EmptyState, ErrorState, Pagination, Spinner, StatusDot, Table, Td, Th } from "@/components/ui/display";
@@ -17,7 +18,7 @@ import { formatDateTime, formatRelative } from "@/utils/format";
 
 type Facts = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-const TABS = ["overview", "metrics", "services", "dependencies", "history", "logs", "incidents"] as const;
+const TABS = ["overview", "metrics", "services", "dependencies", "history", "logs", "incidents", "remediation"] as const;
 type Tab = (typeof TABS)[number];
 
 function formatUptime(seconds: number | null | undefined) {
@@ -521,6 +522,7 @@ export function ResourceDetailPage() {
       {tab === "history" && <History id={r.id} />}
       {tab === "logs" && <ResourceLogs resource={r} />}
       {tab === "incidents" && <ResourceIncidents resource={r} />}
+      {tab === "remediation" && <ResourceRemediation resourceId={r.id} />}
       {editing && <ResourceDialog resource={r} onClose={() => setEditing(false)} onSaved={() => void queryClient.invalidateQueries({ queryKey: ["resources", id] })} />}
     </div>
   );

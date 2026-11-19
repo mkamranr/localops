@@ -13,6 +13,7 @@ from redis.asyncio import ConnectionPool, Redis
 
 from app.api.v1 import (
     ai,
+    approvals,
     auth,
     incidents,
     integrations,
@@ -87,6 +88,7 @@ def create_app(
         resources,
         integrations,
         tools,
+        approvals,
     ):
         v1.include_router(module.router)
     app.include_router(v1)

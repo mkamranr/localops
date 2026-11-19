@@ -21,6 +21,7 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("APP_SECRET_KEY", "test-secret-key-0123456789abcdef0123456789")
 os.environ.setdefault("COOKIE_SECURE", "false")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+os.environ.setdefault("VERIFICATION_DELAY_SECONDS", "0")
 # Test-only Fernet key.
 os.environ.setdefault("LOCALOPS_ENCRYPTION_KEY", "kJ0m3Qx3l5n9oA0m3cR2nS4pZ7Yw1vB6tU8xE5gH2dQ=")
 

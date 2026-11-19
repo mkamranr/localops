@@ -192,6 +192,10 @@ class InvestigationResume(BaseModel):
     answer: str = Field(min_length=1, max_length=2000)
 
 
+class RemediationStepAction(BaseModel):
+    action: Literal["request", "skip"]
+
+
 class ReportBrief(ApiModel):
     """The headline of a completed report, for lists."""
 

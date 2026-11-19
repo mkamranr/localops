@@ -69,6 +69,9 @@ class FakeLLM:
     rca: dict[str, Any] | None = None
     rca_statement: str = "The cause is shown by the collected evidence."
     tool_requests: list[dict[str, Any]] = field(default_factory=list)
+    # Remediation Planner replies, used in order (the last one repeats)
+    remediation_plans: list[dict[str, Any]] = field(default_factory=list)
+    planner_prompts: list[str] = field(default_factory=list)
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -205,7 +208,13 @@ class FakeLLM:
                 return httpx.Response(400, json={"error": {"message": "tools are not supported"}})
             self.calls.append("tools")
             return self._tool_turn(body, system)
-        if "Classify the operator's request" in system:
+        if "Remediation Planner Agent" in system:
+            kind = "remediation"
+            self.planner_prompts.append(user)
+            plans = self.remediation_plans or [{"steps": [], "notes": "Nothing to run."}]
+            idx = min(sum(1 for c in self.calls if c == "remediation"), len(plans) - 1)
+            content = json.dumps(plans[idx])
+        elif "Classify the operator's request" in system:
             kind = "classify"
             idx = min(sum(1 for c in self.calls if c == "classify"), len(self.classifications) - 1)
             content = json.dumps(self.classifications[idx])

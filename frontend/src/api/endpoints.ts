@@ -1,6 +1,15 @@
 import { api } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import type {
+  Approval,
+  ApprovalDetail,
+  ApprovalStatus,
+  ApprovalSummary,
+  Execution,
+  Policy,
+  PolicyDecision,
+  PolicyInput,
+  RiskLevel,
   Agent,
   AgentConfig,
   AgentExecution,
@@ -210,6 +219,8 @@ export const investigationsApi = {
   resume: (id: string, answer: string) =>
     api.post<Investigation>(`/investigations/${id}/resume`, { answer }),
   cancel: (id: string) => api.post<Investigation>(`/investigations/${id}/cancel`),
+  remediationStep: (id: string, step: number, action: "request" | "skip") =>
+    api.post<Investigation>(`/investigations/${id}/remediation/${step}`, { action }),
 };
 
 // ------------------------------------------------------------------ inventory (Phase 3)
@@ -331,4 +342,53 @@ export const toolsApi = {
     api.post<ToolRunResult>(`/tools/${name}/run`, { resource_id, arguments: args }),
   forResource: (id: string, limit = 50) =>
     api.get<ToolExecution[]>(`/resources/${id}/tool-executions`, { limit }),
+};
+
+// ------------------------------------------------------------------ remediation (Phase 5)
+
+export interface ApprovalQuery {
+  page: number;
+  page_size: number;
+  status?: ApprovalStatus;
+  risk?: RiskLevel;
+  mine?: boolean;
+  investigation_id?: string;
+  incident_id?: string;
+}
+
+export interface ExecutionQuery {
+  page: number;
+  page_size: number;
+  investigation_id?: string;
+  incident_id?: string;
+  resource_id?: string;
+  status?: Execution["status"];
+}
+
+export const approvalsApi = {
+  list: (query: ApprovalQuery) => api.get<Page<Approval>>("/approvals", { ...query }),
+  summary: () => api.get<ApprovalSummary>("/approvals/summary"),
+  get: (id: string) => api.get<ApprovalDetail>(`/approvals/${id}`),
+  approve: (id: string, comment?: string) => api.post<Approval>(`/approvals/${id}/approve`, { comment }),
+  reject: (id: string, comment?: string) => api.post<Approval>(`/approvals/${id}/reject`, { comment }),
+  requestChanges: (id: string, comment: string) =>
+    api.post<Approval>(`/approvals/${id}/request-changes`, { comment }),
+  cancel: (id: string, comment?: string) => api.post<Approval>(`/approvals/${id}/cancel`, { comment }),
+};
+
+export const executionsApi = {
+  list: (query: ExecutionQuery) => api.get<Page<Execution>>("/executions", { ...query }),
+  get: (id: string) => api.get<Execution>(`/executions/${id}`),
+};
+
+export type PolicyPreview = PolicyDecision & { tool: string; resource: string };
+
+export const policiesApi = {
+  list: () => api.get<Policy[]>("/policies"),
+  actions: () => api.get<ToolInfo[]>("/policies/actions"),
+  preview: (body: { tool: string; resource_id: string; execution_mode: ExecutionMode }) =>
+    api.post<PolicyPreview>("/policies/preview", body),
+  create: (body: PolicyInput) => api.post<Policy>("/policies", body),
+  update: (id: string, body: Partial<PolicyInput>) => api.put<Policy>(`/policies/${id}`, body),
+  remove: (id: string) => api.delete(`/policies/${id}`),
 };

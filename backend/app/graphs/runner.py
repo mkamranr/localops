@@ -136,7 +136,7 @@ async def _run(rt: InvestigationRuntime, settings: Settings, resume: str | None)
         inv = await session.get(Investigation, rt.investigation_id)
         if inv is None or inv.status in TERMINAL_STATUSES:
             return inv.status if inv else None
-        if inv.status == "awaiting_input" and resume is None:
+        if inv.status in ("awaiting_input", "awaiting_approval") and resume is None:
             return inv.status
         cancel_requested = inv.cancel_requested
         request, mode, attempts = inv.request, inv.execution_mode, inv.attempts
@@ -224,6 +224,21 @@ async def _run(rt: InvestigationRuntime, settings: Settings, resume: str | None)
 
 
 async def _awaiting(rt: InvestigationRuntime, value: Any) -> str:
+    kind = value.get("kind") if isinstance(value, dict) else None
+    if kind in ("approval", "remediation_step"):
+        # Paused on a remediation step: an approver's decision (or, in manual mode,
+        # the requester asking for approval) resumes it.
+        description = str(value.get("description") or "")
+        await _transition(
+            rt,
+            event_type="approval.awaiting"
+            if kind == "approval"
+            else "remediation.awaiting_request",
+            data=value,
+            status="awaiting_approval",
+            pending_question=description[:1000] or None,
+        )
+        return "awaiting_approval"
     question = value.get("question") if isinstance(value, dict) else str(value)
     await _transition(
         rt,

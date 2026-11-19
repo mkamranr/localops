@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   CheckCircle2,
-  ClipboardCheck,
   MessageSquare,
   Pencil,
   Play,
@@ -23,6 +22,7 @@ import {
   transitionLabel,
 } from "@/components/incidents/shared";
 import { RcaReport } from "@/components/investigation/RcaReport";
+import { IncidentRemediation } from "@/components/remediation/History";
 import { ToolExecutionsTable } from "@/components/investigation/ToolExecutionsTable";
 import { InvestigationStatusBadge, ROOT_CAUSE_META } from "@/components/investigation/shared";
 import { HealthBadge, TypeIcon } from "@/components/inventory/shared";
@@ -330,33 +330,6 @@ function RcaTab({ inc }: { inc: IncidentDetail }) {
   return <RcaReport inv={query.data} />;
 }
 
-function Remediation({ inc }: { inc: IncidentDetail }) {
-  const steps = inc.root_cause?.recommended_remediation ?? [];
-  return (
-    <Panel title="Remediation">
-      {steps.length ? (
-        <ol className="space-y-2">
-          {steps.map((m, i) => (
-            <li key={m.action} className="rounded-lg border border-border bg-surface-2 p-3 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs text-subtle">{i + 1}.</span>
-                <span className="flex-1 font-medium">{m.action}</span>
-                <Badge tone={m.risk === "low" ? "success" : m.risk === "medium" ? "warning" : "danger"}>risk {m.risk}</Badge>
-              </div>
-              {m.rationale && <p className="mt-1 text-xs text-muted">{m.rationale}</p>}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="text-sm text-muted">No remediation has been recommended yet.</p>
-      )}
-      <Alert tone="primary">
-        <span className="flex items-center gap-2"><ClipboardCheck className="size-4" /> Recommendations are advisory. Executing them through approvals, with rollback and verification, arrives in Phase 5.</span>
-      </Alert>
-    </Panel>
-  );
-}
-
 function Related({ inc }: { inc: IncidentDetail }) {
   const query = useQuery({ queryKey: ["incident", inc.id, "similar"], queryFn: () => incidentsApi.similar(inc.id) });
   return (
@@ -443,7 +416,7 @@ export function IncidentDetailPage() {
   if (query.isLoading) return <Spinner />;
   if (query.error || !query.data) return <ErrorState message={errorMessage(query.error)} onRetry={() => query.refetch()} />;
   const inc = query.data;
-  const running = inc.investigations.some((i) => ["queued", "running", "awaiting_input"].includes(i.status));
+  const running = inc.investigations.some((i) => ["queued", "running", "awaiting_input", "awaiting_approval"].includes(i.status));
   const canStartInvestigation = canInvestigate && !["resolved", "closed"].includes(inc.status) && !running;
 
   return (
@@ -468,7 +441,7 @@ export function IncidentDetailPage() {
           )}
           {running && (
             <Button variant="secondary" asChild>
-              <Link to={`/investigations/${inc.investigations.find((i) => ["queued", "running", "awaiting_input"].includes(i.status))!.id}`}>
+              <Link to={`/investigations/${inc.investigations.find((i) => ["queued", "running", "awaiting_input", "awaiting_approval"].includes(i.status))!.id}`}>
                 <Search /> Investigation running
               </Link>
             </Button>
@@ -507,7 +480,7 @@ export function IncidentDetailPage() {
       {tab === "timeline" && <TimelineTab inc={inc} />}
       {tab === "diagnostics" && <Diagnostics inc={inc} />}
       {tab === "rca" && <RcaTab inc={inc} />}
-      {tab === "remediation" && <Remediation inc={inc} />}
+      {tab === "remediation" && <IncidentRemediation inc={inc} />}
       {tab === "related" && <Related inc={inc} />}
       {tab === "audit" && <Audit inc={inc} />}
 

@@ -2,7 +2,8 @@
 
     classify ──► clarify? (interrupt, ≤N times) ──► resolve_resources ──► plan_tasks
         ──► run_agent (one per task, fan-out via Send) ──► aggregate
-        ──► analyse_root_cause ──► report
+        ──► analyse_root_cause ──► plan_remediation ──► (per step: request_approval
+        ──► execute_remediation ──► verify_remediation) ──► report
 
 Entities named in the request (or resources chosen explicitly) are resolved against
 the inventory. Specialists then gather evidence:
@@ -15,7 +16,12 @@ the inventory. Specialists then gather evidence:
 
 The Root Cause Analysis agent correlates the evidence; deterministic guards decide
 whether a root cause may be called confirmed, probable or only unverified. Nothing
-here changes a system, and nothing is presented as fact without evidence.
+is presented as fact without evidence.
+
+Diagnostics never change a system. Remediation (``app.graphs.remediation_nodes``)
+proposes registered change tools only; each step passes policy and, unless policy
+allows unattended execution, a human approval before the execution gateway runs it,
+and is then verified deterministically.
 
 State holds JSON-compatible values only so checkpoints stay portable.
 """
@@ -37,6 +43,7 @@ from app.agents import assessments, rca, supervisor
 from app.agents.catalogue import get_spec
 from app.agents.diagnostics import ROLES, TOOL_LOOP_AGENTS
 from app.agents.toolloop import AgentFindings, LoopDeps, LoopSpec, run_tool_loop
+from app.graphs import remediation_nodes as remediation
 from app.graphs.runtime import AgentUnavailableError, InvestigationRuntime, NodeCall
 from app.llm.gateway import ModelError
 from app.tools.registry import tools_for_agent
@@ -59,6 +66,7 @@ class InvestigationState(TypedDict, total=False):
     findings: Annotated[list[dict[str, Any]], operator.add]
     aggregate: dict[str, Any]
     rca: dict[str, Any]
+    remediation: dict[str, Any]
     report: dict[str, Any]
 
 
@@ -560,6 +568,8 @@ def build_graph(
         "analyse_root_cause",
         instrumented("root_cause_analysis", "analyse_root_cause", analyse_root_cause),
     )
+    for name, node in remediation.build_remediation_nodes(rt, instrumented).items():
+        graph.add_node(name, node)
     graph.add_node("report", instrumented("supervisor", "report", report))
 
     graph.add_edge(START, "classify")
@@ -569,7 +579,19 @@ def build_graph(
     graph.add_conditional_edges("plan_tasks", fan_out, ["run_agent", "aggregate"])
     graph.add_edge("run_agent", "aggregate")
     graph.add_edge("aggregate", "analyse_root_cause")
-    graph.add_edge("analyse_root_cause", "report")
+    graph.add_edge("analyse_root_cause", "plan_remediation")
+    steps = ["request_approval", "report"]
+    graph.add_conditional_edges("plan_remediation", remediation.next_step, steps)
+    graph.add_conditional_edges(
+        "request_approval",
+        remediation.after_approval,
+        ["execute_remediation", "replan_step", *steps],
+    )
+    graph.add_conditional_edges(
+        "execute_remediation", remediation.after_execution, ["verify_remediation", *steps]
+    )
+    graph.add_conditional_edges("verify_remediation", remediation.next_step, steps)
+    graph.add_conditional_edges("replan_step", remediation.next_step, steps)
     graph.add_edge("report", END)
     compiled: CompiledStateGraph[Any, Any, Any, Any] = graph.compile(checkpointer=checkpointer)
     return compiled
@@ -637,6 +659,19 @@ def _conclusion(
     )
 
 
+def _remediation_note(rem: dict[str, Any] | None) -> str:
+    if not rem or not rem.get("steps"):
+        return ""
+    done = sum(1 for s in rem["steps"] if s["status"] == "verified")
+    if rem["status"] == "verified":
+        return f" Remediation: {done} step(s) executed and verified."
+    if rem["status"] in ("unverified", "stopped"):
+        return " Remediation was attempted but did not verify; escalate."
+    if rem["status"] == "advisory":
+        return " A remediation plan is proposed (advisory only)."
+    return " The proposed remediation was not executed."
+
+
 def build_report(state: InvestigationState) -> dict[str, Any]:
     """Deterministic RCA report (spec §6.6): states what is known, and what is not."""
     c = state.get("classification", {})
@@ -699,6 +734,9 @@ def build_report(state: InvestigationState) -> dict[str, Any]:
         if t["status"] not in ("completed",)
     ]
     next_steps += [f"Close evidence gap: {g}" for g in analysis.get("evidence_gaps") or []]
+    rem = remediation.finalise(state.get("remediation"))
+    if rem and rem["status"] in ("unverified", "stopped"):
+        next_steps.insert(0, f"Remediation needs attention: {rem.get('reason') or rem['status']}")
     if not next_steps:
         next_steps = (
             ["Review the recommended remediation with the resource owner."]
@@ -747,9 +785,11 @@ def build_report(state: InvestigationState) -> dict[str, Any]:
         "recommended_remediation": analysis.get("recommended_remediation") or [],
         "preventive_recommendations": analysis.get("preventive_recommendations") or [],
         "evidence_gaps": analysis.get("evidence_gaps") or [],
+        # 13. controlled remediation: plan, approvals, executions, verification
+        "remediation": rem,
         "triage": triage,
         "similar_incidents": (knowledge or {}).get("similar_incidents", []),
         "similar_investigations": (knowledge or {}).get("similar_investigations", []),
-        "conclusion": _conclusion(c, root, evidence, findings),
+        "conclusion": _conclusion(c, root, evidence, findings) + _remediation_note(rem),
         "recommended_next_steps": next_steps,
     }

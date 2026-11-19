@@ -31,6 +31,7 @@ from app.models import Agent, AgentExecution, Investigation, ModelEndpoint, Tool
 if TYPE_CHECKING:  # the tool stack imports services that import the dispatcher
     from app.agents.toolloop import ToolBudget
     from app.llm.tool_calling import ToolExchange, ToolTurn
+    from app.remediation.gateway import PreparedAction
     from app.tools.base import ToolSpec
     from app.tools.executor import ToolRunResult
 
@@ -291,6 +292,64 @@ class InvestigationRuntime:
         """Run ``fn`` in a short tenant-bound transaction."""
         async with tenant_session(self.tenant_id) as session:
             return await fn(session)
+
+    # ------------------------------------------------------------------ remediation
+
+    async def remediation_context(self) -> dict[str, Any]:
+        from app.remediation import workflow
+
+        return await workflow.context(self.settings, self.tenant_id, self.investigation_id)
+
+    async def prepare_remediation_step(
+        self, tool: str, arguments: dict[str, Any], mode: str
+    ) -> PreparedAction:
+        """Validate a proposed step and decide its policy; raises GatewayRejectedError."""
+        from app.remediation import workflow
+
+        return await workflow.prepare_step(self.settings, self.tenant_id, tool, arguments, mode)
+
+    async def ensure_approval(self, step: dict[str, Any], requested_by: str) -> dict[str, Any]:
+        from app.remediation import workflow
+
+        return await workflow.ensure_approval(
+            self.settings, self.tenant_id, self.investigation_id, step, uuid.UUID(requested_by)
+        )
+
+    async def approval_info(self, approval_id: str) -> dict[str, Any]:
+        from app.remediation import workflow
+
+        return await workflow.approval_info(self.tenant_id, approval_id)
+
+    async def execute_approval(self, approval_id: str, before: dict[str, Any]) -> dict[str, Any]:
+        from app.remediation import workflow
+
+        return await workflow.execute(self.settings, self.tenant_id, approval_id, before)
+
+    async def record_verification(
+        self, job_id: str | None, after: dict[str, Any], verdict: dict[str, Any]
+    ) -> None:
+        from app.remediation import workflow
+
+        await workflow.record_verification(self.tenant_id, job_id, after, verdict)
+
+    async def incident_step(
+        self,
+        event_type: str,
+        summary: str,
+        *,
+        status: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        from app.remediation import workflow
+
+        await workflow.incident_step(
+            self.tenant_id,
+            self.investigation_id,
+            event_type,
+            summary,
+            status=status,
+            details=details,
+        )
 
     async def resources_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
         from app.agents import discovery

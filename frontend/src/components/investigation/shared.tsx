@@ -18,6 +18,10 @@ import {
   Target,
   Terminal,
   Wrench,
+  ShieldCheck,
+  ShieldX,
+  Hammer,
+  BadgeCheck,
   type LucideIcon,
 } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/display";
@@ -31,12 +35,13 @@ export const STATUS_META: Record<
   queued: { label: "Queued", tone: "neutral", icon: Clock },
   running: { label: "Running", tone: "primary", icon: Loader2, spin: true },
   awaiting_input: { label: "Needs input", tone: "warning", icon: MessageCircleQuestion },
+  awaiting_approval: { label: "Awaiting approval", tone: "warning", icon: ShieldCheck },
   completed: { label: "Completed", tone: "success", icon: CheckCircle2 },
   failed: { label: "Failed", tone: "danger", icon: AlertTriangle },
   cancelled: { label: "Cancelled", tone: "neutral", icon: Ban },
 };
 
-export const ACTIVE: InvestigationStatus[] = ["queued", "running", "awaiting_input"];
+export const ACTIVE: InvestigationStatus[] = ["queued", "running", "awaiting_input", "awaiting_approval"];
 
 export function InvestigationStatusBadge({ status }: { status: InvestigationStatus }) {
   const meta = STATUS_META[status];
@@ -212,6 +217,56 @@ export function describeEvent(e: InvestigationEvent): EventView {
       return { icon: CirclePause, tone: "text-amber-400", title: `Cancellation requested by ${str(d.requested_by)}` };
     case "investigation.cancelled":
       return { icon: Ban, tone: "text-subtle", title: "Investigation cancelled" };
+    case "remediation.planned": {
+      const steps = (d.steps as { description?: string }[] | undefined) ?? [];
+      return {
+        icon: Hammer,
+        tone: steps.length ? "text-violet-400" : "text-subtle",
+        title: steps.length
+          ? `Remediation plan: ${steps.length} step${steps.length === 1 ? "" : "s"}${d.status === "advisory" ? " (advisory)" : ""}`
+          : "No remediation proposed",
+        detail: str(d.reason) || steps.map((s) => s.description).join(" · "),
+      };
+    }
+    case "remediation.skipped":
+      return { icon: SkipForward, tone: "text-subtle", title: "No remediation planned", detail: str(d.reason) };
+    case "remediation.revised":
+      return { icon: Hammer, tone: "text-violet-300", title: `Step ${Number(d.step_index) + 1} revised after requested changes`, detail: str(d.feedback) };
+    case "remediation.awaiting_request":
+      return { icon: ShieldCheck, tone: "text-amber-400", title: `Step ${Number(d.step_index) + 1} is ready — request approval or skip it`, detail: str(d.description) };
+    case "remediation.step_requested":
+      return { icon: ShieldCheck, tone: "text-blue-300", title: `Approval requested for step ${Number(d.step_index) + 1} by ${str(d.by)}` };
+    case "remediation.step_skipped":
+      return { icon: SkipForward, tone: "text-amber-400", title: `Step ${Number(d.step_index) + 1} not executed`, detail: str(d.reason) || (d.by ? `skipped by ${str(d.by)}` : "") };
+    case "approval.requested":
+      return { icon: ShieldCheck, tone: "text-amber-400", title: `Approval requested (${str(d.risk_level)} risk)`, detail: str(d.description) };
+    case "approval.auto_approved":
+      return { icon: ShieldCheck, tone: "text-green-400", title: `Auto-approved by policy (${str(d.risk_level)} risk)`, detail: str(d.description) };
+    case "approval.awaiting":
+      return { icon: CirclePause, tone: "text-amber-400", title: "Waiting for an approver", detail: str(d.description) };
+    case "approval.decided":
+      return {
+        icon: d.status === "approved" ? ShieldCheck : ShieldX,
+        tone: d.status === "approved" ? "text-green-400" : "text-amber-400",
+        title: `Approval ${str(d.status).replace(/_/g, " ")}${d.decided_by ? ` by ${str(d.decided_by)}` : ""}`,
+        detail: str(d.comment),
+      };
+    case "execution.started":
+      return { icon: PlayCircle, tone: "text-blue-400", title: `Executing step ${Number(d.step_index) + 1}: ${str(d.tool)}`, detail: str(d.description) };
+    case "execution.completed":
+      return {
+        icon: d.status === "succeeded" ? CheckCircle2 : AlertTriangle,
+        tone: d.status === "succeeded" ? "text-green-400" : "text-red-400",
+        title: `Execution ${str(d.status)}`,
+        detail: `${str(d.summary)}${d.duration_ms ? ` · ${formatDuration(Number(d.duration_ms))}` : ""}`,
+      };
+    case "verification.completed":
+      return {
+        icon: d.status === "passed" ? BadgeCheck : AlertTriangle,
+        tone: d.status === "passed" ? "text-green-400" : "text-red-400",
+        title: d.status === "passed" ? "Verification passed" : "Verification failed",
+        detail: str(d.summary),
+      };
     default:
       return { icon: CircleDashed, tone: "text-subtle", title: e.event_type };
   }

@@ -31,6 +31,9 @@ def resource_info(r: Resource) -> ResourceInfo:
         discovery_target=r.discovery_target,
         facts=dict(r.facts or {}),
         health_status=r.health_status,
+        environment=r.environment,
+        group_name=r.group_name,
+        tags=list(r.tags or []),
     )
 
 

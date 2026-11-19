@@ -1,4 +1,4 @@
-# AI Orchestration (Phase 4)
+# AI Orchestration (Phase 5)
 
 - **Phase 2:** the model gateway, the agent registry, the LangGraph investigation workflow with
   persistent checkpoints, and live progress streaming.
@@ -7,6 +7,9 @@
 - **Phase 4:** adds the diagnostics agents. They choose **read-only diagnostic tools** through
   model tool calling, and every tool run becomes cited evidence. A Root Cause Analysis agent then
   writes a report whose claims must cite that evidence.
+- **Phase 5:** adds controlled remediation. The Remediation Planner proposes registered
+  remediation tools; the graph pauses for approval, the execution gateway runs approved steps,
+  and the Verification agent re-checks the systems.
 
 ```mermaid
 flowchart LR
@@ -96,7 +99,8 @@ timeout and retries.
 | Incident Triage | Phase 4 | Deterministic: severity and priority from health, environment, blast radius and open incidents |
 | Change Impact | Phase 4 | Deterministic: direct and indirect dependents, risk level, precautions, approvals |
 | Root Cause Analysis | Phase 4 | LLM, after aggregation, with deterministic guards |
-| Remediation Planner, Verification | Phase 5 | |
+| Remediation Planner | Phase 5 | LLM: proposes up to `REMEDIATION_MAX_STEPS` registered remediation tools, each citing evidence |
+| Verification | Phase 5 | Deterministic: re-runs the action's read-only verify tools and compares before/after |
 
 The Supervisor may plan tasks for any specialist. Tasks for agents that don't exist yet are
 recorded as **skipped** with the reason. Root Cause Analysis is never planned; it always runs
@@ -151,15 +155,18 @@ How a tool runs:
    - a claim with no supporting evidence becomes an unverified hypothesis;
    - a `confirmed_fact` must cite successful tool evidence.
 
-Tool output is passed to the model as data and the prompt says so. The tools are read-only, so a
-prompt injection in a log line can at most mislead the analysis. It cannot change a system.
+Tool output is passed to the model as data and the prompt says so. The diagnostic tools are
+read-only, so a prompt injection in a log line can at most mislead the analysis, or lead the
+planner to propose a registered action that policy and a person must still accept. It cannot
+run anything by itself.
 
 ## Root cause analysis (`app/agents/rca.py`)
 
 The RCA agent receives the redacted evidence and the findings, and returns:
 
 - the root cause, contributing factors and alternative hypotheses;
-- impact, recommended remediation (advisory only) and preventive recommendations;
+- impact, recommended remediation (advisory text; actions come from the Remediation Planner)
+  and preventive recommendations;
 - evidence gaps.
 
 Guards then apply, independent of the model:
@@ -177,7 +184,10 @@ Guards then apply, independent of the model:
 ```
 classify ─► clarify? (interrupt; at most INVESTIGATION_MAX_CLARIFICATIONS) ─► resolve_resources
          ─► plan_tasks ─► run_agent × N (parallel fan-out via Send) ─► aggregate
-         ─► analyse_root_cause ─► report
+         ─► analyse_root_cause ─► plan_remediation ─► per step:
+              request_approval (interrupt) ─► execute_remediation ─► verify_remediation
+              (changes requested ─► replan_step)
+         ─► report
 ```
 
 - **classify** (LLM): request type, summary, affected entities, symptoms, urgency, confidence. It
@@ -221,8 +231,42 @@ classify ─► clarify? (interrupt; at most INVESTIGATION_MAX_CLARIFICATIONS) �
 Each instrumented node checks for cancellation, emits `agent.started`/`completed`/`failed`, and
 writes an `agent_executions` row with model, tokens and duration.
 
-Execution modes: `manual` and `assisted` behave the same in Phase 4, because only read-only
-tools run. `autonomous` is rejected until the approval and policy engine exists (Phase 5).
+### Remediation (`app/graphs/remediation_nodes.py`)
+
+- **plan_remediation** (LLM, Remediation Planner): runs only when a root cause is `confirmed` or
+  `probable`, remediation is enabled and a remediation tool applies to a matched resource. The
+  model sees the root cause, the evidence and the remediation tool catalogue (names, argument
+  schemas, default risk), and replies with `{steps, notes}`. Each step is then checked:
+  - the tool must be a registered remediation tool for a matched resource type;
+  - it must cite collected evidence (unknown ids are dropped; no valid citation drops the step);
+  - the gateway validates the arguments and the resource and evaluates policy (`blocked` if
+    denied).
+
+  Dropped steps are listed in `notes`, never repaired silently. If the requester lacks
+  `tool.execute.remediation` the plan is `advisory`. Emits `remediation.planned` or
+  `remediation.skipped`.
+- **request_approval**: creates the approval for the step (idempotent, bound to the action hash)
+  and pauses with `interrupt()` while it is pending. The investigation becomes
+  `awaiting_approval`, and so does a linked incident. A decision resumes the graph; the
+  decision itself is always read from the `approvals` table, so a stale or repeated resume
+  cannot approve anything. In `manual` mode the step first waits for a user to request it or
+  skip it (`remediation.awaiting_request`). In `autonomous` mode a step that policy marks as
+  unattended is auto-approved (`approval.auto_approved`) and does not pause.
+- **execute_remediation**: runs the verify tools once to capture the state *before*, then calls
+  the execution gateway. The incident becomes `remediating`. Emits `execution.started` /
+  `execution.completed`. A failed or refused execution stops the remaining steps.
+- **verify_remediation** (Verification agent): waits `VERIFICATION_DELAY_SECONDS` (longer, with
+  retries, after a reboot), re-runs the verify tools and applies fixed rules. Passing moves the
+  incident to `monitoring` after the last step; failing returns it to `investigating` and stops
+  the remaining steps. Emits `verification.completed`.
+- **replan_step**: after *request changes*, the planner revises that one step with the
+  approver's comment (delimited as data). An unchanged action, or a third revision, drops it.
+- The report gains a `remediation` section (status, steps, approvals, executions, verification),
+  and the conclusion says whether remediation was verified.
+
+Execution modes: `manual` (you request each step), `assisted` (approvals are requested
+automatically) and `autonomous` (policy-allowed low-risk steps run unattended; everything else,
+and anything critical, still waits for a person).
 
 ## Durability and recovery
 
@@ -239,7 +283,10 @@ tools run. `autonomous` is rejected until the approval and policy engine exists 
 - A Redis lock (refreshed while running) prevents two workers from executing the same
   investigation. If the lock is held, arq retries the job later.
 - A clarification answer survives restarts: the paused graph lives in PostgreSQL, and resuming
-  works on any worker.
+  works on any worker. The same holds for approval pauses: a decision (or the expiry sweep, a
+  worker cron that calls `worker_expired_approvals()`) enqueues the resume.
+- A remediation step never runs twice: the gateway allows one execution job per approval, so a
+  node that re-runs after a crash gets the recorded job back.
 
 ## Live events (SSE)
 

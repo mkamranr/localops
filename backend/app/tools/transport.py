@@ -43,6 +43,8 @@ class Transport(Protocol):
 
     async def docker_get(self, path: str) -> httpx.Response: ...
 
+    async def docker_post(self, path: str) -> httpx.Response: ...
+
 
 # Per-host concurrency: at most two diagnostic commands at a time per target.
 _host_locks: dict[str, asyncio.Semaphore] = {}
@@ -117,12 +119,18 @@ class DefaultTransport:
         return out
 
     async def docker_get(self, path: str) -> httpx.Response:
+        return await self._docker("GET", path)
+
+    async def docker_post(self, path: str) -> httpx.Response:
+        return await self._docker("POST", path)
+
+    async def _docker(self, method: str, path: str) -> httpx.Response:
         if self.conn.kind != "docker_tls":
             raise ToolError("This resource has no Docker Engine API access", code="unsupported")
         collector = DockerTLSCollector(self.conn.config, self.conn.credentials)
         try:
             async with self._slot(), collector._client(self.conn.target) as client:
-                return await client.get(path, timeout=self.timeout)
+                return await client.request(method, path, timeout=self.timeout)
         except CollectorError as exc:
             raise ToolError(str(exc), code=exc.code) from exc
         except (httpx.HTTPError, ssl.SSLError, OSError) as exc:

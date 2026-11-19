@@ -27,6 +27,8 @@ import {
   requestTypeLabel,
   urgencyTone,
 } from "@/components/investigation/shared";
+import { liveRemediation } from "@/components/remediation/remediation";
+import { AwaitingApprovalBanner, RemediationPanel } from "@/components/remediation/shared";
 import { Button } from "@/components/ui/button";
 import { Alert, Badge, EmptyState, ErrorState, Panel, Spinner } from "@/components/ui/display";
 import { Input } from "@/components/ui/form";
@@ -433,6 +435,10 @@ export function InvestigationWorkspace({ id, compact = false }: { id: string; co
   });
   const { events, state } = useInvestigationStream(id);
   const { classification, tasks } = useDerived(query.data, events);
+  const remediation = useMemo(
+    () => liveRemediation(query.data?.status === "completed" ? query.data.result.remediation : null, events),
+    [query.data, events],
+  );
   const cancel = useMutation({
     mutationFn: () => investigationsApi.cancel(id),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["investigation", id] }),
@@ -480,12 +486,17 @@ export function InvestigationWorkspace({ id, compact = false }: { id: string; co
       {cancel.error && <Alert>{errorMessage(cancel.error)}</Alert>}
       {inv.status === "failed" && inv.error && <Alert>{inv.error}</Alert>}
       {inv.status === "awaiting_input" && canInvestigate && <ClarificationBox inv={inv} />}
+      {inv.status === "awaiting_approval" && <AwaitingApprovalBanner data={remediation} description={inv.pending_question} />}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)]">
         <ReasoningPanel classification={classification} waiting={active} resources={inv.result?.resources ?? []} />
         <Timeline events={events} state={state} />
         <PlanPanel tasks={tasks} waiting={active} />
       </div>
+
+      {remediation && (remediation.steps.length > 0 || inv.status === "completed") && (
+        <RemediationPanel data={remediation} investigationId={inv.id} />
+      )}
 
       {inv.status === "completed" && inv.result.conclusion && (
         <>

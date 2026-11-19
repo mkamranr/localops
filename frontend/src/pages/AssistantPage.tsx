@@ -81,9 +81,9 @@ function Composer({ onStarted }: { onStarted: (id: string) => void }) {
           <div className="flex items-center gap-2 text-xs text-muted">
             <label htmlFor="mode">Mode</label>
             <Select id="mode" value={mode} onChange={(e) => setMode(e.target.value as ExecutionMode)} className="h-8 w-auto text-xs">
-              <option value="assisted">Assisted — read-only diagnostics run automatically</option>
-              <option value="manual">Manual — recommendations only</option>
-              <option value="autonomous" disabled>Autonomous — requires approval engine (later)</option>
+              <option value="assisted">Assisted — diagnostics run; remediation needs approval</option>
+              <option value="manual">Manual — you choose which remediation to request</option>
+              <option value="autonomous">Autonomous — low-risk actions allowed by policy run unattended</option>
             </Select>
           </div>
           <div className="flex items-center gap-3">

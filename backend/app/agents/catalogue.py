@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-IMPLEMENTED_PHASE: Final = 4
+IMPLEMENTED_PHASE: Final = 5
 
 DEFAULT_AGENT_CONFIG: Final[dict[str, Any]] = {
     "temperature": 0.1,
@@ -105,14 +105,16 @@ CATALOGUE: Final[tuple[AgentSpec, ...]] = (
     AgentSpec(
         "remediation_planner",
         "Remediation Planner Agent",
-        "Proposes remediation steps with risk, rollback and approval requirements.",
+        "After the root-cause analysis, proposes corrective actions using registered "
+        "remediation tools; policy and approvers decide whether they run.",
         5,
         capabilities=("remediation", "rollback"),
     ),
     AgentSpec(
         "verification",
         "Verification Agent",
-        "Confirms that a remediation resolved the issue without side effects.",
+        "Re-checks the affected resource after a remediation and decides, by fixed rules, "
+        "whether it worked.",
         5,
         capabilities=("verification",),
     ),

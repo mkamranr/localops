@@ -392,7 +392,7 @@ export function RcaReport({ inv, printable = false }: { inv: InvestigationDetail
                 <Muted>No remediation suggested.</Muted>
               )}
               <p className="mt-2 flex items-center gap-1.5 text-[11px] text-subtle">
-                <ShieldCheck className="size-3" /> Advisory only: nothing was changed. Approved execution arrives with Phase 5.
+                <ShieldCheck className="size-3" /> The analysis is advisory; actions run only from the Remediation plan, after policy checks and approval.
               </p>
             </Section>
             <Section n={12} title="Preventive recommendations">

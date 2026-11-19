@@ -727,6 +727,35 @@ async def record_investigation_result(
         )
 
 
+async def workflow_update(
+    s: AsyncSession,
+    incident_id: uuid.UUID | None,
+    event_type: str,
+    summary: str,
+    *,
+    status: str | None = None,
+    actor: str | None = "system",
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Record a remediation-workflow step on an incident and, when the transition table
+    allows it, move the incident (including the workflow-only statuses)."""
+    if incident_id is None:
+        return
+    incident = await s.get(Incident, incident_id, with_for_update=True)
+    if incident is None:
+        return
+    moved: dict[str, str] = {}
+    if status and status != incident.status:
+        if incident.status == "new" and status != "investigating":
+            # The workflow always passes through "investigating" first.
+            _apply_status(incident, "investigating")
+        if status in TRANSITIONS.get(incident.status, ()):
+            moved = {"from": incident.status, "to": status}
+            _apply_status(incident, status)
+            incident.updated_at = datetime.now(UTC)
+    _event(s, incident, event_type, summary, actor, {**(details or {}), **moved})
+
+
 # ---------------------------------------------------------------- automatic
 
 

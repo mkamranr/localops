@@ -49,6 +49,8 @@ class ToolOutput:
 
 
 Runner = Callable[["ToolContext", Any], Awaitable[ToolOutput]]
+# Human-readable, sanitised statement of exactly what a change tool will do.
+Describer = Callable[[Any, "ResourceInfo"], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,20 @@ class ToolSpec:
     remote: bool = True  # contacts a managed host (needs tool.execute.readonly)
     timeout_seconds: float = 45.0
     category: str = "general"
+    # Phase 5: ``change`` tools alter state and only run through the execution gateway.
+    kind: str = "read"  # read | change
+    default_risk: str = "low"  # low | medium | high | critical
+    describe_action: Describer | None = None
+    # Read tools that show whether a change worked (verification).
+    verify_with: tuple[str, ...] = ()
+
+    @property
+    def is_change(self) -> bool:
+        return self.kind == "change"
+
+    @property
+    def permission(self) -> str:
+        return "tool.execute.remediation" if self.is_change else "tool.execute.readonly"
 
     @property
     def needs_resource(self) -> bool:
@@ -91,8 +107,11 @@ class ToolSpec:
             "category": self.category,
             "resource_types": list(self.resource_types),
             "remote": self.remote,
-            "risk_level": "read",
-            "requires_approval": False,
+            "kind": self.kind,
+            "risk_level": self.default_risk if self.is_change else "read",
+            "requires_approval": self.is_change,
+            "permission": self.permission,
+            "verify_with": list(self.verify_with),
             "timeout_seconds": self.timeout_seconds,
             "input_schema": self.json_schema(),
         }
@@ -111,3 +130,6 @@ class ResourceInfo:
     discovery_target: str | None
     facts: dict[str, Any]
     health_status: str
+    environment: str | None = None
+    group_name: str | None = None
+    tags: list[str] = field(default_factory=list)

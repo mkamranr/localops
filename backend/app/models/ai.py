@@ -30,11 +30,12 @@ INVESTIGATION_STATUSES = (
     "queued",
     "running",
     "awaiting_input",
+    "awaiting_approval",
     "completed",
     "failed",
     "cancelled",
 )
-ACTIVE_STATUSES = ("queued", "running", "awaiting_input")
+ACTIVE_STATUSES = ("queued", "running", "awaiting_input", "awaiting_approval")
 TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 

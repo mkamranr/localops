@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     investigation_max_tool_calls: int = Field(30, ge=1, le=200)  # per investigation
     tool_output_model_bytes: int = Field(6000, ge=1000, le=50000)  # tool output a model sees
     incident_auto_create: bool = True  # open incidents when discovery sees failures
+    # Phase 5: controlled remediation
+    remediation_enabled: bool = True  # kill switch for every state-changing tool
+    remediation_max_steps: int = Field(3, ge=1, le=10)  # per investigation plan
+    approval_default_ttl_minutes: int = Field(60, ge=5, le=10080)
+    verification_delay_seconds: float = Field(5.0, ge=0, le=300)
 
     # --- Infrastructure discovery ---
     discovery_concurrency: int = Field(8, ge=1, le=64)  # targets collected in parallel

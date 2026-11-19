@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from typing import Final
 
-from app.tools import docker, inventory, linux, network, windows
+from app.tools import docker, inventory, linux, network, remediation, windows
 from app.tools.base import ToolSpec
 
-ALL_TOOLS: Final[tuple[ToolSpec, ...]] = (
+READ_TOOLS: Final[tuple[ToolSpec, ...]] = (
     *linux.TOOLS,
     *windows.TOOLS,
     *docker.TOOLS,
     *network.TOOLS,
     *inventory.TOOLS,
 )
+# State-changing tools: only the execution gateway runs these (phase 5).
+CHANGE_TOOLS: Final[tuple[ToolSpec, ...]] = remediation.TOOLS
+ALL_TOOLS: Final[tuple[ToolSpec, ...]] = (*READ_TOOLS, *CHANGE_TOOLS)
 TOOLS: Final[dict[str, ToolSpec]] = {t.name: t for t in ALL_TOOLS}
 
 # Default tool sets per agent (overridable with the agent's ``allowed_tools`` config).
@@ -63,5 +66,10 @@ def get_tool(name: str) -> ToolSpec | None:
 
 
 def tools_for_agent(agent_type: str, allowed: list[str] | None = None) -> list[ToolSpec]:
+    """Read tools for a diagnostics agent; change tools are never handed to an agent."""
     names = list(allowed) if allowed else list(AGENT_TOOLS.get(agent_type, ()))
-    return [TOOLS[n] for n in names if n in TOOLS]
+    return [TOOLS[n] for n in names if n in TOOLS and not TOOLS[n].is_change]
+
+
+def change_tools() -> list[ToolSpec]:
+    return list(CHANGE_TOOLS)

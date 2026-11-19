@@ -1,9 +1,10 @@
 """Background worker (arq, Redis-backed).
 
 Runs investigation graphs, infrastructure discovery runs, the discovery scheduler
-(every minute) and a heartbeat cron. On startup it verifies the checkpoint schema and
-re-enqueues investigations that were queued or running when the previous worker
-stopped; each run resumes from its last persisted checkpoint.
+(every minute), the approval expiry sweep (every minute) and a heartbeat cron. On
+startup it verifies the checkpoint schema and re-enqueues investigations that were
+queued or running when the previous worker stopped; each run resumes from its last
+persisted checkpoint.
 
 Run:   arq app.worker.WorkerSettings
 Check: arq --check app.worker.WorkerSettings
@@ -71,6 +72,22 @@ async def discovery_scheduler(ctx: dict[str, Any]) -> int:
     return await schedule_due(ArqDispatcher(ctx["redis"]))
 
 
+async def expire_approvals(ctx: dict[str, Any]) -> int:
+    """Expire overdue approval requests and resume their paused investigations."""
+    from app.services.approval_service import expire_overdue
+
+    async with get_engine().connect() as conn:
+        result = await conn.execute(
+            text("SELECT id, tenant_id, investigation_id FROM worker_expired_approvals()")
+        )
+        rows = [(r[0], r[1], r[2]) for r in result.all()]
+    if not rows:
+        return 0
+    done = await expire_overdue(rows, ArqDispatcher(ctx["redis"]), ctx["redis"])
+    log.info("approvals_expired", count=done)
+    return done
+
+
 async def recover(ctx: dict[str, Any]) -> int:
     """Re-enqueue investigations interrupted by a restart."""
     async with get_engine().connect() as conn:
@@ -114,6 +131,7 @@ class WorkerSettings:
     cron_jobs: ClassVar[list[Any]] = [
         cron(heartbeat, second={0}, run_at_startup=True),
         cron(discovery_scheduler, second={30}, run_at_startup=False, unique=True),
+        cron(expire_approvals, second={15}, run_at_startup=True, unique=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

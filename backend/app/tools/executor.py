@@ -125,8 +125,16 @@ async def run_tool(
 
     result: ToolRunResult
     resource: ResourceInfo | None = None
-    if spec is None or (allowed_names is not None and name not in allowed_names):
-        choices = ", ".join(sorted(allowed_names or TOOLS))
+    if spec is not None and spec.is_change:
+        result = reject(
+            f"'{name}' changes the system and can only run through the remediation "
+            "workflow (plan, policy, approval).",
+            "change_tool",
+        )
+    elif spec is None or (allowed_names is not None and name not in allowed_names):
+        choices = ", ".join(
+            sorted(allowed_names or (n for n, t in TOOLS.items() if not t.is_change))
+        )
         result = reject(
             f"Unknown or unavailable tool '{name}'. Available: {choices}", "unknown_tool"
         )
@@ -157,7 +165,7 @@ async def run_tool(
             ):
                 fitting = sorted(
                     t.name
-                    for t in (allowed or TOOLS.values())
+                    for t in (allowed or [s for s in TOOLS.values() if not s.is_change])
                     if resource.resource_type in t.resource_types
                 )
                 result = reject(

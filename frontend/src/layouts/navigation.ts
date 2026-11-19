@@ -44,7 +44,7 @@ export const NAVIGATION: NavGroup[] = [
     items: [
       { label: "Investigations", path: "/investigations", icon: Search, permission: "incident.read" },
       { label: "Incidents", path: "/incidents", icon: ShieldAlert, permission: "incident.read" },
-      { label: "Approvals", path: "/approvals", icon: ClipboardCheck, permission: "approval.read", phase: 5 },
+      { label: "Approvals", path: "/approvals", icon: ClipboardCheck, permission: "approval.read" },
     ],
   },
   {

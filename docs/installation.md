@@ -1,4 +1,4 @@
-# Installation (Phase 4)
+# Installation (Phase 5)
 
 ## Requirements
 
@@ -198,8 +198,14 @@ unhealthy, is unhealthy.
   resources. The root cause and summary are written back to the incident when the
   investigation completes. Completed investigations also appear under **Reports**, where they
   can be printed or downloaded as Markdown.
-- **Execution:** remediation is advisory in Phase 4. Executing it, with approvals, rollback and
-  verification, arrives in Phase 5.
+- **Remediation:** after the root cause, the Remediation Planner may propose up to
+  `REMEDIATION_MAX_STEPS` actions from the registered remediation tools. In `assisted` mode
+  each step is sent for approval (**Approvals** in the sidebar); in `manual` mode you request
+  approval for each step yourself, or skip it; in `autonomous` mode only steps that a policy
+  marks as unattended (by default: restarting or starting a container in a non-production
+  environment) run without a person. A second person approves, the action runs, and the
+  Verification agent re-checks the system. The incident moves through `awaiting_approval`,
+  `remediating` and `monitoring` (or back to `investigating` if verification fails).
 
 Related settings in `.env`:
 
@@ -208,8 +214,50 @@ Related settings in `.env`:
 | `INVESTIGATION_MAX_TOOL_CALLS` | 30 | Diagnostic tool runs allowed per investigation |
 | `TOOL_OUTPUT_MODEL_BYTES` | 6000 | Redacted tool output a model sees per run |
 | `INCIDENT_AUTO_CREATE` | true | Open incidents for resources that turn unhealthy |
+| `REMEDIATION_ENABLED` | true | Kill switch: `false` blocks every remediation action, even approved ones |
+| `REMEDIATION_MAX_STEPS` | 3 | Steps the planner may propose per investigation |
+| `APPROVAL_DEFAULT_TTL_MINUTES` | 60 | How long an approval request stays open |
+| `VERIFICATION_DELAY_SECONDS` | 5 | Wait before re-checking a system after an action |
 
-## 7. Run the test suite (optional)
+## 7. Remediation prerequisites
+
+Diagnostics need read access only. Remediation needs the rights to make the change, and nothing
+more. Grant them only on hosts where you want LocalOps to act.
+
+**Linux.** Service actions and reboots use `sudo -n` (never a password prompt). Add a sudoers
+file with `visudo -f /etc/sudoers.d/localops`:
+
+```
+# all services (simplest)
+localops ALL=(root) NOPASSWD: /usr/bin/systemctl restart *, /usr/bin/systemctl start *, /usr/bin/systemctl stop *
+
+# or only named units (tighter)
+localops ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl restart payroll-api
+
+# reboots (critical: always need a second approver)
+localops ALL=(root) NOPASSWD: /usr/bin/systemctl reboot
+
+# terminating other users' processes (the tool's use_sudo option)
+localops ALL=(root) NOPASSWD: /usr/bin/kill
+```
+
+Replace `localops` with the SSH user of the integration. Without a rule, the action fails with a
+clear "sudo" message and nothing changes. Processes owned by the SSH user can be terminated
+without sudo.
+
+**Windows.** The WinRM account needs the right to control the services it should restart. Use
+local Administrators membership, or grant start/stop rights per service with
+`sc.exe sdset <service> <SDDL>`. Reboots need the *Force shutdown from a remote system* user
+right.
+
+**Docker.** Membership of the `docker` group (SSH) or the TLS client certificate already allows
+start, stop and restart.
+
+**Approvers.** Create at least one user with the *Infrastructure Administrator* or *Tenant
+Administrator* role besides the people who run investigations. By default nobody can approve
+their own request.
+
+## 8. Run the test suite (optional)
 
 ```bash
 docker compose -f docker-compose.test.yml run --rm --build tests

@@ -154,7 +154,7 @@ export function ResourceLogs({ resource }: { resource: Resource }) {
     queryKey: ["resources", resource.id, "tool-runs"],
     queryFn: () => toolsApi.forResource(resource.id),
   });
-  const remote = useMemo(() => (tools.data ?? []).filter((t) => t.remote), [tools.data]);
+  const remote = useMemo(() => (tools.data ?? []).filter((t) => t.remote && t.kind !== "change"), [tools.data]);
 
   return (
     <div className="space-y-5">

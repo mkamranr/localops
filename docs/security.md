@@ -1,4 +1,4 @@
-# Security Model (Phase 4)
+# Security Model (Phase 5)
 
 ## Authentication
 
@@ -68,12 +68,14 @@ reads return nothing and cross-tenant writes are rejected (`test_investigations.
 - Model output is **advisory and validated**. Every Supervisor result is parsed against a strict
   schema. Planned tasks are filtered to known agents and capped.
 - **The model can only choose read-only tools from a fixed catalogue** (see *Diagnostic tools*
-  below). It cannot supply a command, a script or a target outside the inventory. Tools that
-  change state, such as restarts or configuration changes, arrive in Phase 5 behind the policy
-  and approval engine.
+  below). It cannot supply a command, a script or a target outside the inventory.
+- **The model never runs a change.** The Remediation Planner can only *propose* registered
+  remediation tools. Every proposal goes through the execution gateway, policy and (unless a
+  policy allows unattended execution) a human approval (see *Controlled remediation* below).
 - Request text and tool output are passed to the model as delimited data, with an instruction
   to ignore embedded instructions. This reduces, but cannot eliminate, prompt injection, which
-  is why model output can at most trigger read-only diagnostics.
+  is why model output can at most trigger read-only diagnostics or *propose* an action that a
+  person then reviews.
 - Reports never invent evidence:
   - Entities are marked verified only when they match the inventory.
   - Evidence ids are created by LocalOps for real tool runs and inventory reads, never by the
@@ -82,7 +84,6 @@ reads return nothing and cross-tenant writes are rejected (`test_investigations.
   - A root cause is `confirmed` only with at least two successful tool results and confidence
     of 0.7 or more.
 - Prompts and completions are not logged; only token counts, latency and outcome are.
-- `autonomous` execution mode is refused until Phase 5.
 
 ## Infrastructure access (Phase 3–4)
 
@@ -163,7 +164,69 @@ reads return nothing and cross-tenant writes are rejected (`test_investigations.
 - Permissions: `incident.read`, `incident.create`, `incident.update` and
   `incident.investigate`. Every create, update, comment, status change and close is audited.
 - Status changes are validated server-side. `awaiting_approval` and `remediating` can only be
-  set by the Phase 5 workflow, not through the API.
+  set by the remediation workflow, not through the API.
+
+## Controlled remediation (Phase 5)
+
+State-changing actions are a separate, small catalogue of **remediation tools**
+(`app/tools/remediation.py`):
+
+| Tool | What runs on the target | Default risk |
+|---|---|---|
+| `linux_service_restart` / `_start` / `_stop` | `sudo -n systemctl <op> -- <unit>` | high / medium / high |
+| `docker_container_restart` / `_start` / `_stop` | `docker <op> -- <name>` (SSH) or the Engine API (TLS) | medium / medium / high |
+| `windows_service_restart` / `_start` / `_stop` | `Restart-Service` / `Start-Service` / `Stop-Service -Name '<n>' -Force` | high / medium / high |
+| `linux_process_terminate` | `kill -TERM` (optionally `-KILL`) only if the PID's command line contains `expected_command` | high |
+| `windows_process_terminate` | `Stop-Process -Id` with the same command-line check | high |
+| `linux_reboot` / `windows_reboot` | a delayed `systemctl reboot` / `shutdown.exe /r` | critical |
+
+- **Fixed templates.** Arguments are validated (unit, service and container names against strict
+  patterns, PID ≥ 2, printable `expected_command`) and then shell-quoted or inserted as a
+  PowerShell literal. The PID check and the signal run in one script, so a reused PID is never
+  killed, and kernel threads are refused.
+- **Isolation.** Change tools are never handed to the diagnostics agents, and the generic tool
+  endpoint (`POST /tools/{name}/run`) and executor refuse them (`change_tool`).
+- **Execution gateway** (`app/remediation/gateway.py`): the only path that runs a change tool.
+  At execution time it checks, in order:
+  1. the kill switch `REMEDIATION_ENABLED`;
+  2. the approval is `approved` and was decided within its validity window;
+  3. the action re-validated from the stored parameters still has the approved **action hash**
+     (sha256 of tool, canonical arguments, resource id and investigation id), so any change to
+     the action invalidates the approval;
+  4. the requester is active and still holds `tool.execute.remediation`;
+  5. the approver is active, still holds `approval.approve`, and is not the requester unless the
+     policy allowed self-approval; an auto-approval is valid only while policy still allows
+     unattended execution;
+  6. policy re-evaluated now neither denies the action nor raises its risk;
+  7. the approval has not run before (one `execution_jobs` row per approval, enforced by a
+     unique key).
+
+  Every outcome, including refusals, is an `execution_jobs` row and a `remediation.execute`
+  audit entry. Output is redacted before it is stored.
+- **Policies** (Settings → Remediation Policies, `settings.manage` to edit) set the risk of an
+  action by tool, risk, environment, resource type, tag or group, and may allow self-approval,
+  unattended execution in autonomous mode, or deny an action outright. Rules that no policy can
+  override:
+  - critical actions (reboots) are never auto-approved and never self-approved;
+  - outside `autonomous` mode every action needs a human approval;
+  - `*nonprod*` matches only resources with an explicit, non-production environment, so an
+    untagged resource is never treated as non-production.
+- **Four-eyes.** By default the person who started the investigation cannot approve its actions
+  (`403 self_approval`). Operators hold `tool.execute.remediation` but not `approval.approve`;
+  Infrastructure and Tenant Administrators can approve.
+- **Requests expire** after `APPROVAL_DEFAULT_TTL_MINUTES` (or the policy's value). Expiry is
+  enforced on read, at decision time and by a worker sweep every minute.
+- **Advisory plans.** If the requester lacks `tool.execute.remediation`, the plan is shown but
+  no approval is requested and nothing runs.
+- **Verification** is deterministic: the action's read-only verify tools run before and after,
+  and fixed rules decide (service active, container running without a rising restart count,
+  process gone, host back). A failed verification stops the remaining steps and returns the
+  incident to `investigating`. There is no automatic rollback: start, restart, stop, terminate
+  and reboot have no safe generic undo, so failures are escalated to people.
+- **Tables.** `policies`, `approvals` and `execution_jobs` are under row-level security. The
+  app role cannot delete approvals or execution jobs. Audit actions: `approval.request`,
+  `approval.auto_approve`, `approval.approve` / `reject` / `request_changes` / `cancel` /
+  `expire`, `remediation.request`, `remediation.skip`, `remediation.execute` and `policy.*`.
 
 ## Secrets at rest
 

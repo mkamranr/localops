@@ -202,6 +202,7 @@ export type InvestigationStatus =
   | "queued"
   | "running"
   | "awaiting_input"
+  | "awaiting_approval"
   | "completed"
   | "failed"
   | "cancelled";
@@ -348,6 +349,7 @@ export interface InvestigationReport {
   triage: { severity: string; priority: string; reasons: string[]; investigation_paths: string[] } | null;
   similar_incidents: SimilarItem[];
   similar_investigations: SimilarItem[];
+  remediation?: RemediationSection | null;
 }
 
 export interface InvestigationDetail extends Investigation {
@@ -726,6 +728,9 @@ export interface ToolInfo {
   name: string;
   description: string;
   category: string;
+  kind: "read" | "change";
+  permission: string;
+  verify_with: string[];
   risk_level: string;
   requires_approval: boolean;
   remote: boolean;
@@ -746,4 +751,207 @@ export interface ToolRunResult {
   duration_ms: number;
   execution_id: string | null;
   resource_name: string | null;
+}
+
+// ------------------------------------------------------------------ Remediation (Phase 5)
+
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+export type ApprovalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "changes_requested"
+  | "cancelled"
+  | "expired"
+  | "executed"
+  | "failed";
+export type RemediationStepStatus =
+  | "proposed"
+  | "advisory"
+  | "blocked"
+  | "approved"
+  | "changes_requested"
+  | "rejected"
+  | "cancelled"
+  | "expired"
+  | "skipped"
+  | "dropped"
+  | "executed"
+  | "failed"
+  | "verified"
+  | "unverified"
+  | "not_run";
+
+export interface PolicyDecision {
+  risk_level: RiskLevel;
+  requires_approval: boolean;
+  auto_approve: boolean;
+  allow_self_approval: boolean;
+  approval_ttl_minutes: number;
+  denied: boolean;
+  denied_reason: string | null;
+  matched_rules: string[];
+  notes: string[];
+}
+
+export interface Verification {
+  status: "passed" | "failed";
+  summary: string;
+  reasons: string[];
+}
+
+export interface RemediationStep {
+  index: number;
+  tool: string;
+  arguments: Record<string, unknown>;
+  resource_id: string;
+  resource_name: string;
+  resource_type: string;
+  description: string;
+  risk_level: RiskLevel;
+  policy: PolicyDecision;
+  status: RemediationStepStatus;
+  status_reason: string | null;
+  rationale?: string;
+  expected_impact?: string;
+  evidence_ids?: string[];
+  approval_id: string | null;
+  approval?: { status: ApprovalStatus; auto_approved: boolean; comment: string | null } | null;
+  job_id: string | null;
+  execution: { status: string; summary: string; error_code?: string | null; duration_ms?: number | null } | null;
+  verification: Verification | null;
+  revisions: number;
+}
+
+export interface RemediationSection {
+  status: "none" | "skipped" | "advisory" | "planned" | "stopped" | "verified" | "unverified" | "not_executed";
+  reason: string | null;
+  mode: ExecutionMode | null;
+  notes: string[];
+  steps: RemediationStep[];
+}
+
+export interface Execution {
+  id: string;
+  investigation_id: string | null;
+  approval_id: string | null;
+  step_index: number | null;
+  tool: string;
+  resource_id: string | null;
+  resource_name: string | null;
+  parameters: Record<string, unknown>;
+  description: string;
+  risk_level: RiskLevel;
+  actor: string | null;
+  status: "running" | "succeeded" | "failed" | "rejected";
+  execution_result: {
+    summary?: string;
+    output?: string;
+    error?: string;
+    error_code?: string;
+    data?: Record<string, unknown>;
+  };
+  before: Record<string, { ok: boolean; summary: string }>;
+  after: Record<string, { ok: boolean; summary: string }>;
+  verification_status: "pending" | "passed" | "failed" | "skipped";
+  verification: Partial<Verification>;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+}
+
+export interface Approval {
+  id: string;
+  investigation_id: string;
+  incident_id: string | null;
+  step_index: number;
+  requested_by: string;
+  requested_by_username: string | null;
+  approved_by: string | null;
+  approved_by_username: string | null;
+  action: string;
+  action_parameters: Record<string, unknown>;
+  description: string;
+  resource_id: string | null;
+  resource_name: string | null;
+  risk_level: RiskLevel;
+  rationale: string;
+  expected_impact: string;
+  evidence_ids: string[];
+  policy: Partial<PolicyDecision>;
+  auto_approved: boolean;
+  status: ApprovalStatus;
+  decision_comment: string | null;
+  expires_at: string;
+  decided_at: string | null;
+  created_at: string;
+}
+
+export interface ApprovalEvidence {
+  id: string;
+  tool?: string | null;
+  resource?: string | null;
+  summary?: string;
+  excerpt?: string;
+}
+
+export interface ApprovalDetail extends Approval {
+  investigation_title: string | null;
+  incident_key: string | null;
+  can_decide: boolean;
+  cannot_decide_reason: string | null;
+  evidence: ApprovalEvidence[];
+  execution: Execution | null;
+}
+
+export interface ApprovalSummary {
+  pending: number;
+  pending_for_me: number;
+  by_risk: Partial<Record<RiskLevel, number>>;
+  expiring_soon: number;
+}
+
+export interface PolicyMatch {
+  tools?: string[];
+  categories?: string[];
+  risks?: string[];
+  environments?: string[];
+  resource_types?: string[];
+  tags?: string[];
+  groups?: string[];
+}
+
+export interface PolicyEffect {
+  risk_level?: RiskLevel | null;
+  auto_approve?: boolean | null;
+  allow_self_approval?: boolean | null;
+  deny?: boolean | null;
+  deny_reason?: string | null;
+  approval_ttl_minutes?: number | null;
+}
+
+export interface PolicyRules {
+  match: PolicyMatch;
+  effect: PolicyEffect;
+}
+
+export interface Policy {
+  id: string;
+  name: string;
+  description: string;
+  policy_type: string;
+  priority: number;
+  rules: PolicyRules;
+  enabled: boolean;
+  builtin: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface PolicyInput {
+  name: string;
+  description: string;
+  priority: number;
+  rules: PolicyRules;
+  enabled: boolean;
 }

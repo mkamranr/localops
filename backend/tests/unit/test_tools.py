@@ -226,7 +226,11 @@ def test_catalogue_is_consistent() -> None:
         schema = spec.openai_tool()["function"]["parameters"]
         assert schema["type"] == "object"
         assert schema.get("additionalProperties") is False
-        assert spec.describe()["risk_level"] == "read"
+        if spec.is_change:
+            assert spec.describe()["requires_approval"] is True
+            assert spec.permission == "tool.execute.remediation"
+        else:
+            assert spec.describe()["risk_level"] == "read"
     assert [t.name for t in tools_for_agent("network_diagnostics", ["net_tcp_check", "nope"])] == [
         "net_tcp_check"
     ]

@@ -196,7 +196,9 @@ PLAN_EXAMPLE: dict[str, Any] = {
 
 # Agents a plan may name. Root cause analysis always runs after the specialists, so it
 # is not planned.
-PLANNABLE: tuple[str, ...] = tuple(t for t in SPECIALIST_TYPES if t != "root_cause_analysis")
+# These run as fixed stages after the specialists, never as planned tasks.
+STAGES = frozenset({"root_cause_analysis", "remediation_planner", "verification"})
+PLANNABLE: tuple[str, ...] = tuple(t for t in SPECIALIST_TYPES if t not in STAGES)
 
 
 def _agent_line(a: AgentSpec) -> str:

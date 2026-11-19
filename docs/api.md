@@ -1,4 +1,4 @@
-# REST API (Phase 4)
+# REST API (Phase 5)
 
 Base path: `/api/v1`. Interactive OpenAPI docs are at `/api/v1/docs` when `APP_ENV` is not
 `production`.
@@ -25,7 +25,7 @@ the refresh token is set as an `httpOnly` cookie.
 | GET | `/roles`, `/roles/{id}` | `role.read` | |
 | GET | `/permissions` | `role.read` | |
 | GET | `/audit-logs?action=&outcome=&user_id=&entity_type=&entity_id=&date_from=&date_to=` | `audit.read` | `action` is a prefix match |
-| GET | `/dashboard/summary` | `dashboard.read` | Counts + service health (resources and incidents are live; approvals are a placeholder) |
+| GET | `/dashboard/summary` | `dashboard.read` | Counts + service health, including open incidents and pending approvals |
 | GET | `/dashboard/activity?limit=` | `dashboard.read` + `audit.read` | |
 | GET | `/models` · `/models/{id}` | `settings.read` | API keys are never returned (`has_api_key`) |
 | POST | `/models` | `settings.manage` | First model becomes the default |
@@ -41,7 +41,8 @@ the refresh token is set as an `httpOnly` cookie.
 | GET | `/investigations/{id}/events?after=` | `incident.read` | Ordered by `seq` |
 | GET | `/investigations/{id}/stream` | `incident.read` | SSE; honours `Last-Event-ID`; ends with `event: end` |
 | POST | `/investigations/{id}/resume` | `incident.investigate` | `{answer}` when status is `awaiting_input` |
-| POST | `/investigations/{id}/cancel` | `incident.investigate` | Immediate if waiting; otherwise at the next step |
+| POST | `/investigations/{id}/cancel` | `incident.investigate` | Immediate if waiting (pending approvals are cancelled); otherwise at the next step |
+| POST | `/investigations/{id}/remediation/{step}` | `incident.investigate` (+ `tool.execute.remediation` to request) | Manual mode: `{action: request\|skip}` for the step the run is waiting on → 202 |
 | GET | `/investigations/{id}/tool-executions` | `incident.read` | Tool runs with redacted output and evidence ids |
 | GET | `/incidents?status=&severity=&source=&assigned_to=&resource_id=&open=&q=` | `incident.read` | Paginated; `q` is full-text |
 | GET | `/incidents/summary` | `incident.read` | Open counts by severity and status |
@@ -54,8 +55,18 @@ the refresh token is set as an `httpOnly` cookie.
 | POST | `/incidents/{id}/comments` | `incident.update` | `{body}` |
 | GET | `/incidents/{id}/similar` | `incident.read` | Past incidents and investigations by text and shared resources |
 | GET | `/incidents/{id}/tool-executions` | `incident.read` | Tool runs from the linked investigations |
-| GET | `/tools?resource_type=` | `incident.read` | The read-only tool catalogue with argument schemas |
-| POST | `/tools/{name}/run` | `tool.execute.readonly` | `{resource_id, arguments}` → status, summary, redacted output (audited) |
+| GET | `/tools?resource_type=` | `incident.read` | The tool catalogue with argument schemas; `kind` is `read` or `change` |
+| POST | `/tools/{name}/run` | `tool.execute.readonly` | Read tools only: `{resource_id, arguments}` → status, summary, redacted output (audited) |
+| GET | `/approvals?status=&risk=&mine=&investigation_id=&incident_id=` | `approval.read` | Paginated approval requests |
+| GET | `/approvals/summary` | `approval.read` | Pending count, by risk, mine, expiring soon |
+| GET | `/approvals/{id}` | `approval.read` | Includes cited evidence, `can_decide` and the execution |
+| POST | `/approvals/{id}/approve` · `/reject` | `approval.approve` | `{comment?}`; `403 self_approval` for the requester unless policy allows; 409 if already decided or expired |
+| POST | `/approvals/{id}/request-changes` | `approval.approve` | `{comment}` (required); the planner revises the step (at most twice) |
+| POST | `/approvals/{id}/cancel` | `approval.read` | Requester or an approver |
+| GET | `/executions?investigation_id=&incident_id=&resource_id=&status=` · `/executions/{id}` | `approval.read` | Remediation jobs with before/after state and verification |
+| GET | `/policies` · `/policies/actions` | `settings.read` | Remediation policies; the registered remediation tools |
+| POST | `/policies/preview` | `settings.read` | `{tool, resource_id, execution_mode}` → risk, approval and the matched rules |
+| POST · PUT · DELETE | `/policies`, `/policies/{id}` | `settings.manage` | `{name, description, priority, rules: {match, effect}, enabled}` (audited) |
 | GET | `/resources/{id}/tool-executions?limit=` | `resource.read` | Recent tool runs on that resource |
 | GET | `/integrations` · `/integrations/{id}` | `integration.read` | Credentials are never returned (`has_credentials`, `credential_fields`) |
 | POST | `/integrations` | `integration.configure` | `{name, integration_type, configuration, credentials, targets, schedule_minutes}` |

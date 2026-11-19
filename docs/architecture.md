@@ -1,4 +1,4 @@
-# Architecture (Phase 4)
+# Architecture (Phase 5)
 
 LocalOps is a **modular monolith** (spec §25.1): one FastAPI backend image runs as `api`,
 `worker` and the one-shot `migrate`. A static React bundle is served behind an nginx reverse proxy.
@@ -92,6 +92,23 @@ Revision `0004` adds:
 All of these are under RLS. Incident numbers are allocated under a transaction-scoped advisory
 lock.
 
+Revision `0005` adds remediation:
+
+- `policies` (per-tenant remediation rules, seeded with defaults);
+- `approvals` (bound to an action hash, with a snapshot of the cited evidence, an expiry, and
+  at most one pending request per plan step);
+- `execution_jobs` (one per approval, with before/after state and the verification verdict);
+- the investigation status `awaiting_approval`, and the SECURITY DEFINER function
+  `worker_expired_approvals()` for the expiry sweep.
+
+### Remediation
+
+```
+RCA ─► Remediation Planner ─► gateway.prepare (validate, policy) ─► approval (pending | auto)
+    ─► graph pauses (interrupt) ─► approver decides ─► resume ─► gateway.execute_approved
+    ─► execution_jobs + audit ─► Verification (verify tools, fixed rules) ─► incident status
+```
+
 ### Investigations and incidents
 
 ```
@@ -134,16 +151,18 @@ system fonts only and runs fully offline.
   - Reports (printable RCA reports with a Markdown download);
   - Infrastructure (list, plus resource detail with live Logs and Incidents tabs);
   - Dependencies (cytoscape.js topology), Tools & Integrations, Agents, Audit Logs;
-  - Settings (Account, Users, Roles, AI Models, Tenants).
+  - Approvals (pending and history, plus a detail page with the exact operation, evidence,
+    policy and the decision buttons);
+  - Settings (Account, Users, Roles, AI Models, Remediation Policies, Tenants).
 
   The heavier pages are loaded on demand. Screens arriving in later phases have "planned"
   placeholders.
 
-## Planned next (Phase 5)
+## Planned next (Phase 6)
 
-- The approval workflow, the policy engine and the execution gateway;
-- remediation planning, with state-changing tools behind approvals;
-- rollback and verification.
+- Runbooks and the knowledge base, with vector search (Qdrant);
+- MCP tool servers;
+- notifications (email and chat) for approvals and incidents.
 
 Further integrations (SNMP, Kubernetes, VMware, Proxmox, monitoring systems), runbooks and
 vector search follow in later phases.

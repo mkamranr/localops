@@ -157,8 +157,9 @@ async def test_investigation_end_to_end(app: FastAPI, make_tenant: Any, fake_llm
     execs = (
         await t.admin.get("/api/v1/agents/executions", params={"investigation_id": inv_id})
     ).json()
-    # classify, resolve, plan, 3 specialists, aggregate, root cause, report
-    assert execs["total"] == 9
+    # classify, resolve, plan, 3 specialists, aggregate, root cause, remediation plan
+    # (skipped: no root cause), report
+    assert execs["total"] == 10
     assert {e["status"] for e in execs["items"]} == {"success"}
     assert sum(e["llm_calls"] for e in execs["items"]) == 4  # + one tool turn per diagnostic
 
@@ -171,7 +172,7 @@ async def test_investigation_end_to_end(app: FastAPI, make_tenant: Any, fake_llm
     summary = (await t.admin.get("/api/v1/dashboard/summary")).json()
     assert summary["active_investigations"] == 0
     assert summary["investigations_24h"] == 1
-    assert summary["agent_executions_24h"] == 9
+    assert summary["agent_executions_24h"] == 10
     assert summary["default_model"] == "Local Ollama"
 
 
@@ -186,13 +187,13 @@ async def test_investigation_without_model_fails_clearly(
     assert "No AI model is configured" in inv["error"]
 
 
-async def test_autonomous_mode_rejected(make_tenant: Any) -> None:
+async def test_autonomous_mode_accepted(make_tenant: Any) -> None:
     t: TenantInfo = await make_tenant()
     r = await t.admin.post(
         "/api/v1/investigations", json={"request": "restart nginx", "execution_mode": "autonomous"}
     )
-    assert r.status_code == 422
-    assert r.json()["error"]["code"] == "mode_unavailable"
+    assert r.status_code == 202
+    assert r.json()["execution_mode"] == "autonomous"
 
 
 async def test_clarification_survives_restart(

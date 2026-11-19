@@ -21,6 +21,7 @@ from app.services import audit_service as audit
 from app.services.agent_service import ensure_agents
 from app.services.context import RequestContext
 from app.services.model_service import ensure_env_default_model
+from app.services.policy_service import ensure_policies
 
 
 async def seed_system_roles(
@@ -278,5 +279,6 @@ async def ensure_platform_bootstrap(
 async def seed_ai_defaults(session: AsyncSession, tenant_id: uuid.UUID) -> tuple[int, bool]:
     """Register catalogue agents and the env default model (session in tenant context)."""
     added = await ensure_agents(session, tenant_id)
+    await ensure_policies(session, tenant_id)
     model = await ensure_env_default_model(session, get_settings(), tenant_id)
     return added, model

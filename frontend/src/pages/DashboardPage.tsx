@@ -254,7 +254,7 @@ export function DashboardPage() {
         <StatCard icon={Server} tone="violet" value={`${d.resources.online}/${d.resources.total}`} label="Infrastructure resources" sub="online / total" />
         <StatCard icon={ShieldAlert} tone="red" value={d.incidents.open_total} label="Active incidents" sub={`critical ${d.incidents.critical} · high ${d.incidents.high}`} />
         <StatCard icon={Search} tone="blue" value={d.active_investigations} label="Active investigations" sub={`${d.investigations_24h} started in the last 24h`} to="/investigations" />
-        <StatCard icon={ClipboardCheck} tone="amber" value={d.pending_approvals} label="Pending approvals" sub="awaiting decision" phase={5} />
+        <StatCard icon={ClipboardCheck} tone="amber" value={d.pending_approvals} label="Pending approvals" sub="awaiting decision" to="/approvals" />
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">

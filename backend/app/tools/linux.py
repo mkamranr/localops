@@ -88,7 +88,18 @@ async def top_processes(ctx: ToolContext, args: TopProcessesArgs) -> ToolOutput:
     top = " ".join(lines[1].split()[8:])[:80] if len(lines) > 1 else "none"
     cpu = lines[1].split()[3] if len(lines) > 1 and len(lines[1].split()) > 3 else "?"
     mem = lines[1].split()[4] if len(lines) > 1 and len(lines[1].split()) > 4 else "?"
-    return ToolOutput(out, f"Top process by {args.sort_by}: {top} ({cpu}% CPU, {mem}% memory)")
+    rows = []
+    for line in lines[1:]:
+        parts = line.split(None, 8)
+        if len(parts) >= 9 and parts[0].isdigit():
+            rows.append(
+                {"pid": int(parts[0]), "user": parts[2], "cpu": parts[3], "command": parts[8]}
+            )
+    return ToolOutput(
+        out,
+        f"Top process by {args.sort_by}: {top} ({cpu}% CPU, {mem}% memory)",
+        {"processes": rows},
+    )
 
 
 # ------------------------------------------------------------------ services
@@ -115,13 +126,18 @@ async def service_status(ctx: ToolContext, args: ServiceArgs) -> ToolOutput:
         line.split("=", 1) for line in out.splitlines() if "=" in line and not line.startswith(" ")
     )
     if props.get("LoadState") == "not-found":
-        return ToolOutput(_combine(out, err), f"Unit {args.unit} does not exist on this host")
+        return ToolOutput(
+            _combine(out, err),
+            f"Unit {args.unit} does not exist on this host",
+            {"unit": {"LoadState": "not-found"}},
+        )
     summary = (
         f"{props.get('Id', args.unit)}: {props.get('ActiveState', '?')}/"
         f"{props.get('SubState', '?')}, result {props.get('Result', '?')}, "
         f"restarts {props.get('NRestarts', '?')}"
     )
-    return ToolOutput(_combine(out, err), summary)
+    keep = ("Id", "LoadState", "ActiveState", "SubState", "Result", "NRestarts")
+    return ToolOutput(_combine(out, err), summary, {"unit": {k: props.get(k) for k in keep}})
 
 
 async def failed_units(ctx: ToolContext, args: ResourceArgs) -> ToolOutput:

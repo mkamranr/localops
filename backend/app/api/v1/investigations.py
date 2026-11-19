@@ -33,6 +33,7 @@ from app.schemas.ai import (
     InvestigationEventOut,
     InvestigationOut,
     InvestigationResume,
+    RemediationStepAction,
     ReportBrief,
 )
 from app.schemas.common import Page, PageParams
@@ -44,7 +45,9 @@ log = get_logger("localops.sse")
 
 KEEPALIVE_SECONDS = 15.0
 
-Status = Literal["queued", "running", "awaiting_input", "completed", "failed", "cancelled"]
+Status = Literal[
+    "queued", "running", "awaiting_input", "awaiting_approval", "completed", "failed", "cancelled"
+]
 
 
 @router.post("", response_model=InvestigationOut, status_code=202)
@@ -107,6 +110,27 @@ async def resume_investigation(
     principal: Principal = Depends(require_principal("incident.investigate")),
 ) -> InvestigationOut:
     inv = await svc.resume(principal, client, investigation_id, body.answer, dispatcher, redis)
+    return InvestigationOut.model_validate(inv)
+
+
+@router.post(
+    "/{investigation_id}/remediation/{step_index}",
+    response_model=InvestigationOut,
+    status_code=202,
+)
+async def remediation_step(
+    investigation_id: uuid.UUID,
+    step_index: int,
+    body: RemediationStepAction,
+    client: ClientInfo = Depends(client_info),
+    dispatcher: InvestigationDispatcher = Depends(dispatcher_dep),
+    redis: Redis = Depends(redis_dep),
+    principal: Principal = Depends(require_principal("incident.investigate")),
+) -> InvestigationOut:
+    """Manual mode: request approval for the proposed step, or skip it."""
+    inv = await svc.remediation_step(
+        principal, client, investigation_id, step_index, body.action, dispatcher, redis
+    )
     return InvestigationOut.model_validate(inv)
 
 

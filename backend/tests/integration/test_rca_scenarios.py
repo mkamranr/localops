@@ -83,20 +83,38 @@ LOGS = (
 
 @dataclass
 class DiagHost(FakeHost):
-    """A fake host that also answers the read-only diagnostic commands."""
+    """A fake host that also answers the diagnostic and remediation commands."""
+
+    restarted: int = 0
+    killed: bool = False
 
     def reply(self, command: str) -> tuple[int, str, str]:
+        if command.startswith("docker restart"):
+            self.commands.append(command)
+            self.restarted += 1
+            return 0, "migrate\n", ""
+        if command.startswith("cmd=$(ps -o args= -p 4242"):
+            self.commands.append(command)
+            if "worker.py" not in command:
+                return 0, "LOCALOPS_MISMATCHpython worker.py --loop\n", ""
+            self.killed = True
+            return 0, "LOCALOPS_RC=0\nLOCALOPS_GONE\n", ""
         if command.startswith("echo '## uptime'"):
             self.commands.append(command)
             return 0, SNAPSHOT, ""
         if command.startswith("ps -eo"):
             self.commands.append(command)
+            if self.killed:
+                return 0, "\n".join(line for line in PS.splitlines() if "4242" not in line), ""
             return 0, PS, ""
         if command.startswith("if command -v journalctl"):
             self.commands.append(command)
             return 0, JOURNAL, ""
         if command.startswith("docker inspect --type container"):
             self.commands.append(command)
+            if self.restarted:
+                running = {"Status": "running", "ExitCode": 0, "OOMKilled": False, "Running": True}
+                return 0, json.dumps([{**INSPECT[0], "State": running}]), ""
             return 0, json.dumps(INSPECT), ""
         if command.startswith("docker logs"):
             self.commands.append(command)
@@ -335,18 +353,29 @@ async def test_scenario_b_docker_restart_loop_from_incident(
 class FakeWinRM:
     def __init__(self) -> None:
         self.scripts: list[str] = []
+        self.restarted = False
 
     async def shell(self, command: str) -> CommandResult:
         raise AssertionError("not used")
 
     async def powershell(self, script: str) -> str:
         self.scripts.append(script)
+        if "Restart-Service" in script:
+            self.restarted = True
+            return json.dumps(
+                {
+                    "found": True,
+                    "name": "Spooler",
+                    "display_name": "Print Spooler",
+                    "status": "Running",
+                }
+            )
         if "Win32_Service" in script:
             return json.dumps(
                 {
                     "name": "Spooler",
                     "display_name": "Print Spooler",
-                    "state": "Stopped",
+                    "state": "Running" if self.restarted else "Stopped",
                     "start_mode": "Auto",
                     "exit_code": 1067,
                     "depends_on": ["RPCSS=Running"],
@@ -535,7 +564,9 @@ async def test_incident_lifecycle_and_permissions(
     assert run.status_code == 403
     tools = (await viewer.get("/api/v1/tools", params={"resource_type": "windows_server"})).json()
     assert "windows_event_log" in {x["name"] for x in tools}
-    assert all(x["risk_level"] == "read" for x in tools)
+    assert all(x["risk_level"] == "read" for x in tools if x["kind"] == "read")
+    # change tools are listed (with their approval requirement) but never run directly
+    assert {x["requires_approval"] for x in tools if x["kind"] == "change"} == {True}
 
     # another tenant cannot see these incidents
     other: TenantInfo = await make_tenant()

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, LogOut, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { authApi, dashboardApi } from "@/api/endpoints";
+import { approvalsApi, authApi, dashboardApi } from "@/api/endpoints";
 import { Alert, Badge, StatusDot } from "@/components/ui/display";
 import { NAVIGATION, visibleNavigation } from "@/layouts/navigation";
 import { useAuthStore } from "@/stores/authStore";
@@ -50,6 +50,13 @@ export function AppLayout() {
     enabled: hasPermission("dashboard.read"),
     refetchInterval: 30_000,
   });
+  const approvals = useQuery({
+    queryKey: ["approvals", "summary"],
+    queryFn: approvalsApi.summary,
+    enabled: hasPermission("approval.read"),
+    refetchInterval: 20_000,
+  });
+  const pendingApprovals = approvals.data?.pending ?? 0;
   const services = health.data?.services ?? [];
   const healthy = services.filter((s) => s.status === "ok").length;
   const systemTone = !services.length ? "neutral" : healthy === services.length ? "success" : "danger";
@@ -95,6 +102,14 @@ export function AppLayout() {
                     >
                       <item.icon className="size-4 shrink-0" />
                       <span className="flex-1 truncate">{item.label}</span>
+                      {item.path === "/approvals" && pendingApprovals > 0 && (
+                        <span
+                          className="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-black"
+                          aria-label={`${pendingApprovals} pending approvals`}
+                        >
+                          {pendingApprovals}
+                        </span>
+                      )}
                       {item.phase && (
                         <span className="rounded bg-surface-3 px-1.5 text-[10px] text-subtle">
                           P{item.phase}

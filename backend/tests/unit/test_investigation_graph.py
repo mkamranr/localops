@@ -129,6 +129,9 @@ class MemoryRuntime(InvestigationRuntime):
             resource_type="linux_server",
         )
 
+    async def remediation_context(self) -> dict[str, Any]:
+        return {"requester_id": None, "can_remediate": False, "mode": "assisted", "enabled": True}
+
     async def in_session(self, fn: Any) -> Any:
         return Assessment(note="No history in the in-memory runtime")
 

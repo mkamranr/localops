@@ -9,6 +9,7 @@ from sqlalchemy import case, func, select
 from app.models import (
     ACTIVE_STATUSES,
     AgentExecution,
+    Approval,
     AuditLog,
     Investigation,
     ModelEndpoint,
@@ -87,6 +88,11 @@ async def summary(ctx: RequestContext, services: list[ServiceHealth]) -> Dashboa
     ).one()
 
     incidents = await incident_service.open_counts(s)
+    pending_approvals = await s.scalar(
+        select(func.count())
+        .select_from(Approval)
+        .where(Approval.status == "pending", Approval.expires_at > datetime.now(UTC))
+    )
 
     return DashboardSummary(
         tenant=ctx.principal.tenant_slug,
@@ -106,4 +112,5 @@ async def summary(ctx: RequestContext, services: list[ServiceHealth]) -> Dashboa
         agent_executions_24h=ex[0],
         agent_failures_24h=ex[1],
         default_model=default_model,
+        pending_approvals=int(pending_approvals or 0),
     )
