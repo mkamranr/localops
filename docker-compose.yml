@@ -95,7 +95,8 @@ services:
 
   redis:
     <<: *hardening
-    cap_add: [CHOWN, SETGID, SETUID]
+    # Like postgres: the entrypoint fixes ownership in the existing volume as root first.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     mem_limit: ${REDIS_MEM_LIMIT:-512m}
     image: redis:7.4.2-alpine
     container_name: localops-redis
