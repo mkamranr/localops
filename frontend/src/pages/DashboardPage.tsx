@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  BookOpen,
   Bot,
   ClipboardCheck,
   Database,
@@ -12,7 +13,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { errorMessage } from "@/api/client";
-import { agentsApi, dashboardApi } from "@/api/endpoints";
+import { agentsApi, dashboardApi, knowledgeApi } from "@/api/endpoints";
 import { Badge, EmptyState, ErrorState, Panel, Spinner, StatusDot } from "@/components/ui/display";
 import { useAuthStore } from "@/stores/authStore";
 import type { AuditLog, DashboardSummary } from "@/types/api";
@@ -234,6 +235,16 @@ function AgentActivityPanel({ data }: { data: DashboardSummary }) {
   );
 }
 
+function KnowledgeCard({ documents }: { documents: number }) {
+  const canRead = useAuthStore((s) => s.hasPermission("knowledge.read"));
+  const stats = useQuery({ queryKey: ["knowledge", "stats"], queryFn: knowledgeApi.stats, enabled: canRead, staleTime: 60_000 });
+  const s = stats.data;
+  const sub = s
+    ? `${s.validated} validated · ${s.vector_store === "ok" && s.embedding_model ? "semantic search on" : "keyword search only"}`
+    : "runbooks, past incidents";
+  return <StatCard icon={BookOpen} tone="green" value={s?.documents ?? documents} label="Knowledge documents" sub={sub} to={canRead ? "/knowledge" : undefined} />;
+}
+
 export function DashboardPage() {
   const canAudit = useAuthStore((s) => s.hasPermission("audit.read"));
   const query = useQuery({
@@ -250,11 +261,12 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard icon={Server} tone="violet" value={`${d.resources.online}/${d.resources.total}`} label="Infrastructure resources" sub="online / total" />
         <StatCard icon={ShieldAlert} tone="red" value={d.incidents.open_total} label="Active incidents" sub={`critical ${d.incidents.critical} · high ${d.incidents.high}`} />
         <StatCard icon={Search} tone="blue" value={d.active_investigations} label="Active investigations" sub={`${d.investigations_24h} started in the last 24h`} to="/investigations" />
         <StatCard icon={ClipboardCheck} tone="amber" value={d.pending_approvals} label="Pending approvals" sub="awaiting decision" to="/approvals" />
+        <KnowledgeCard documents={d.knowledge_documents} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">

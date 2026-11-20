@@ -37,6 +37,12 @@ from app.models.inventory import (
     ResourceRelationship,
     SshHostKey,
 )
+from app.models.knowledge import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeDocumentVersion,
+    KnowledgeFeedback,
+)
 from app.models.remediation import (
     APPROVAL_STATUSES,
     RISK_LEVELS,
@@ -44,6 +50,7 @@ from app.models.remediation import (
     ExecutionJob,
     Policy,
 )
+from app.models.tooling import ToolDefinition
 
 __all__ = [
     "ACTIVE_STATUSES",
@@ -64,6 +71,10 @@ __all__ = [
     "Integration",
     "Investigation",
     "InvestigationEvent",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "KnowledgeDocumentVersion",
+    "KnowledgeFeedback",
     "ModelEndpoint",
     "Permission",
     "Policy",
@@ -76,6 +87,7 @@ __all__ = [
     "RolePermission",
     "SshHostKey",
     "Tenant",
+    "ToolDefinition",
     "ToolExecution",
     "User",
     "UserRole",

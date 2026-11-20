@@ -1,6 +1,20 @@
 import { api } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import type {
+  AgentCreateInput,
+  DocumentStatus,
+  HttpToolInput,
+  KnowledgeDocument,
+  KnowledgeDocumentDetail,
+  KnowledgeDocumentInput,
+  KnowledgeSearchResponse,
+  KnowledgeStats,
+  KnowledgeVersion,
+  KnowledgeVersionDetail,
+  ModelPurpose,
+  ToolDefinition,
+  ToolDefinitionUpdate,
+  ToolSyncResult,
   Approval,
   ApprovalDetail,
   ApprovalStatus,
@@ -164,6 +178,7 @@ export interface ModelInput {
   clear_api_key?: boolean;
   enabled?: boolean;
   is_default?: boolean;
+  purpose?: ModelPurpose;
 }
 
 export const modelsApi = {
@@ -183,14 +198,18 @@ export const agentsApi = {
       description: string;
       model_id: string | null;
       enabled: boolean;
-      configuration: Partial<Omit<AgentConfig, "allowed_tools">>;
+      configuration: Partial<AgentConfig>;
     }>,
   ) => api.put<Agent>(`/agents/${id}`, body),
+  create: (body: AgentCreateInput) => api.post<Agent>("/agents", body),
+  remove: (id: string) => api.delete(`/agents/${id}`),
   executions: (query: {
     page: number;
     page_size: number;
     agent_type?: string;
     investigation_id?: string;
+    status?: AgentExecution["status"];
+    errors_only?: boolean;
   }) => api.get<Page<AgentExecution>>("/agents/executions", { ...query }),
 };
 
@@ -338,7 +357,7 @@ export const incidentsApi = {
 
 export const toolsApi = {
   list: (resource_type?: string) => api.get<ToolInfo[]>("/tools", { resource_type }),
-  run: (name: string, resource_id: string, args: Record<string, unknown>) =>
+  run: (name: string, resource_id: string | null, args: Record<string, unknown>) =>
     api.post<ToolRunResult>(`/tools/${name}/run`, { resource_id, arguments: args }),
   forResource: (id: string, limit = 50) =>
     api.get<ToolExecution[]>(`/resources/${id}/tool-executions`, { limit }),
@@ -391,4 +410,84 @@ export const policiesApi = {
   create: (body: PolicyInput) => api.post<Policy>("/policies", body),
   update: (id: string, body: Partial<PolicyInput>) => api.put<Policy>(`/policies/${id}`, body),
   remove: (id: string) => api.delete(`/policies/${id}`),
+};
+
+// ------------------------------------------------------------------ knowledge (Phase 6)
+
+export interface KnowledgeQuery {
+  page: number;
+  page_size: number;
+  q?: string;
+  document_type?: string;
+  status?: string;
+  source?: string;
+  tag?: string;
+  index_status?: string;
+}
+
+export interface KnowledgeSearchInput {
+  query: string;
+  document_types?: string[];
+  resource_id?: string;
+  tags?: string[];
+  include_deprecated?: boolean;
+  limit?: number;
+}
+
+export interface KnowledgeUploadInput {
+  file: File;
+  title?: string;
+  document_type?: string;
+  category?: string;
+  tags?: string[];
+  resource_ids?: string[];
+  status?: "active" | "draft";
+}
+
+export const knowledgeApi = {
+  list: (query: KnowledgeQuery) => api.get<Page<KnowledgeDocument>>("/knowledge", { ...query }),
+  stats: () => api.get<KnowledgeStats>("/knowledge/stats"),
+  search: (body: KnowledgeSearchInput) => api.post<KnowledgeSearchResponse>("/knowledge/search", body),
+  get: (id: string) => api.get<KnowledgeDocumentDetail>(`/knowledge/${id}`),
+  create: (body: KnowledgeDocumentInput) => api.post<KnowledgeDocumentDetail>("/knowledge", body),
+  upload: (input: KnowledgeUploadInput) => {
+    const form = new FormData();
+    form.append("file", input.file);
+    if (input.title) form.append("title", input.title);
+    if (input.document_type) form.append("document_type", input.document_type);
+    if (input.category) form.append("category", input.category);
+    if (input.tags?.length) form.append("tags", input.tags.join(","));
+    if (input.resource_ids?.length) form.append("resource_ids", input.resource_ids.join(","));
+    if (input.status) form.append("status", input.status);
+    return api.post<KnowledgeDocumentDetail>("/knowledge/upload", form);
+  },
+  update: (id: string, body: Partial<Omit<KnowledgeDocumentInput, "status">> & { status?: DocumentStatus; note?: string }) =>
+    api.put<KnowledgeDocumentDetail>(`/knowledge/${id}`, body),
+  remove: (id: string) => api.delete(`/knowledge/${id}`),
+  versions: (id: string) => api.get<KnowledgeVersion[]>(`/knowledge/${id}/versions`),
+  version: (id: string, version: number) =>
+    api.get<KnowledgeVersionDetail>(`/knowledge/${id}/versions/${version}`),
+  restore: (id: string, version: number) =>
+    api.post<KnowledgeDocumentDetail>(`/knowledge/${id}/versions/${version}/restore`),
+  validate: (id: string, validated = true) =>
+    api.post<KnowledgeDocumentDetail>(`/knowledge/${id}/validate`, { validated }),
+  feedback: (id: string, body: { helpful: boolean; comment?: string; chunk_id?: string; investigation_id?: string }) =>
+    api.post(`/knowledge/${id}/feedback`, body),
+  reindex: (document_ids?: string[]) => api.post<{ queued: number }>("/knowledge/reindex", { document_ids }),
+};
+
+// ------------------------------------------------------------------ registered tools (Phase 6)
+
+export const toolDefinitionsApi = {
+  list: (query: { integration_id?: string; source?: "mcp" | "http"; status?: string } = {}) =>
+    api.get<ToolDefinition[]>("/tools/definitions", { ...query }),
+  get: (id: string) => api.get<ToolDefinition>(`/tools/definitions/${id}`),
+  update: (id: string, body: ToolDefinitionUpdate) => api.put<ToolDefinition>(`/tools/definitions/${id}`, body),
+  remove: (id: string) => api.delete(`/tools/definitions/${id}`),
+  createHttp: (body: HttpToolInput) => api.post<ToolDefinition>("/tools/definitions", body),
+  updateHttp: (id: string, body: Partial<Pick<HttpToolInput, "description" | "parameters" | "template">>) =>
+    api.put<ToolDefinition>(`/tools/definitions/${id}/http`, body),
+  test: (id: string, args: Record<string, unknown>) =>
+    api.post<ToolRunResult>(`/tools/definitions/${id}/test`, { arguments: args }),
+  sync: (integrationId: string) => api.post<ToolSyncResult>(`/integrations/${integrationId}/sync-tools`),
 };

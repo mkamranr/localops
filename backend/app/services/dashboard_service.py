@@ -73,7 +73,9 @@ async def summary(ctx: RequestContext, services: list[ServiceHealth]) -> Dashboa
     ).one()
     default_model = await s.scalar(
         select(ModelEndpoint.name).where(
-            ModelEndpoint.is_default.is_(True), ModelEndpoint.enabled.is_(True)
+            ModelEndpoint.is_default.is_(True),
+            ModelEndpoint.enabled.is_(True),
+            ModelEndpoint.purpose == "chat",
         )
     )
 

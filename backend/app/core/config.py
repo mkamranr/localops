@@ -70,6 +70,17 @@ class Settings(BaseSettings):
     approval_default_ttl_minutes: int = Field(60, ge=5, le=10080)
     verification_delay_seconds: float = Field(5.0, ge=0, le=300)
 
+    # --- Phase 6: knowledge base and extensibility ---
+    # Optional embedding endpoint seeded into tenants (OpenAI-compatible /v1/embeddings).
+    embedding_provider: Literal["vllm", "ollama", "llamacpp", "openai_compatible"] = "ollama"
+    embedding_base_url: str | None = None
+    embedding_model: str | None = None
+    knowledge_max_upload_mb: int = Field(10, ge=1, le=200)
+    knowledge_chunk_chars: int = Field(2400, ge=400, le=12000)
+    knowledge_chunk_overlap: int = Field(300, ge=0, le=2000)
+    knowledge_vector_collection_prefix: str = "lo_knowledge"
+    mcp_default_timeout_seconds: float = Field(30.0, ge=1, le=600)
+
     # --- Infrastructure discovery ---
     discovery_concurrency: int = Field(8, ge=1, le=64)  # targets collected in parallel
     discovery_max_targets: int = Field(500, ge=1, le=5000)  # per integration

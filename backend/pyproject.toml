@@ -27,6 +27,10 @@ dependencies = [
     "cryptography>=44",
     "asyncssh>=2.18",
     "pywinrm>=0.5",
+    "qdrant-client>=1.13",
+    "jsonschema>=4.23",
+    "pypdf>=5.1",
+    "python-multipart>=0.0.20",
 ]
 
 [dependency-groups]
@@ -36,6 +40,7 @@ dev = [
     "fakeredis>=2.26",
     "ruff>=0.8",
     "mypy>=1.13",
+    "types-jsonschema>=4.26.0.20261006",
 ]
 
 [tool.uv]

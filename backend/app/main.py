@@ -18,6 +18,7 @@ from app.api.v1 import (
     incidents,
     integrations,
     investigations,
+    knowledge,
     resources,
     system,
     tenants,
@@ -89,6 +90,7 @@ def create_app(
         integrations,
         tools,
         approvals,
+        knowledge,
     ):
         v1.include_router(module.router)
     app.include_router(v1)

@@ -582,6 +582,65 @@ class ModelClient:
             True, round((time.perf_counter() - start) * 1000, 1), models, available, reply=reply
         )
 
+    async def embed(self, texts: list[str], *, batch_size: int = 32) -> list[list[float]]:
+        """Embeddings via the OpenAI-compatible ``/v1/embeddings`` endpoint.
+
+        Batched; transient failures are retried like chat requests. Returns one vector
+        per input, in order.
+        """
+        ep = self.endpoint
+        out: list[list[float]] = []
+        url = f"{ep.api_base}/embeddings"
+        for offset in range(0, len(texts), max(batch_size, 1)):
+            batch = texts[offset : offset + batch_size]
+            attempts = ep.max_retries + 1
+            last_error: ModelError | None = None
+            for attempt in range(1, attempts + 1):
+                start = time.perf_counter()
+                try:
+                    async with self._client() as client:
+                        resp = await client.post(url, json={"model": ep.model, "input": batch})
+                    if resp.status_code == 429 or resp.status_code >= 500:
+                        raise ModelError(
+                            f"Embedding endpoint returned HTTP {resp.status_code}", retryable=True
+                        )
+                    if resp.status_code >= 400:
+                        raise ModelError(
+                            f"Embedding endpoint rejected the request (HTTP {resp.status_code}): "
+                            f"{_error_snippet(resp)}",
+                            status=resp.status_code,
+                        )
+                    data = sorted(resp.json()["data"], key=lambda d: int(d.get("index", 0)))
+                    vectors = [[float(x) for x in d["embedding"]] for d in data]
+                    if len(vectors) != len(batch) or not all(vectors):
+                        raise ModelError("Embedding endpoint returned the wrong number of vectors")
+                    self._record("success", time.perf_counter() - start, None)
+                    out.extend(vectors)
+                    last_error = None
+                    break
+                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    last_error = ModelError(
+                        f"Embedding endpoint unreachable: {type(exc).__name__}", retryable=True
+                    )
+                except ModelError as exc:
+                    last_error = exc
+                except (ValueError, KeyError, TypeError) as exc:
+                    last_error = ModelError(f"Malformed embedding response: {type(exc).__name__}")
+                self._record("error", time.perf_counter() - start, None)
+                log.warning(
+                    "embedding_request_failed",
+                    endpoint=ep.name,
+                    model=ep.model,
+                    attempt=attempt,
+                    error=str(last_error),
+                )
+                if not last_error.retryable or attempt == attempts:
+                    break
+                await self._sleep(min(0.5 * 2 ** (attempt - 1), 8.0))
+            if last_error is not None:
+                raise last_error
+        return out
+
     def _record(self, outcome: str, elapsed: float, usage: Usage | None) -> None:
         ep = self.endpoint
         MODEL_REQUESTS.labels(ep.provider, ep.model, outcome).inc()

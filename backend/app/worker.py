@@ -1,7 +1,8 @@
 """Background worker (arq, Redis-backed).
 
-Runs investigation graphs, infrastructure discovery runs, the discovery scheduler
-(every minute), the approval expiry sweep (every minute) and a heartbeat cron. On
+Runs investigation graphs, infrastructure discovery runs, knowledge indexing, the
+discovery scheduler (every minute), the approval expiry sweep (every minute), the
+knowledge sync (every 5 minutes), the MCP tool sync (hourly) and a heartbeat cron. On
 startup it verifies the checkpoint schema and re-enqueues investigations that were
 queued or running when the previous worker stopped; each run resumes from its last
 persisted checkpoint.
@@ -33,7 +34,13 @@ from app.database.session import dispose_engine, get_engine, init_engine
 from app.discovery.engine import run_discovery
 from app.discovery.scheduler import schedule_due
 from app.graphs.checkpointer import verify_checkpoint_schema
-from app.graphs.dispatch import DISCOVERY_JOB, JOB_NAME, QUEUE_NAME, ArqDispatcher
+from app.graphs.dispatch import (
+    DISCOVERY_JOB,
+    INDEX_JOB,
+    JOB_NAME,
+    QUEUE_NAME,
+    ArqDispatcher,
+)
 from app.graphs.runner import InvestigationLockedError, run_investigation
 
 log = get_logger("localops.worker")
@@ -66,6 +73,26 @@ async def run_discovery_job(ctx: dict[str, Any], tenant_id: str, run_id: str) ->
         run_id=uuid.UUID(run_id),
         redis=ctx["redis"],
     )
+
+
+async def index_document_job(ctx: dict[str, Any], tenant_id: str, document_id: str) -> str:
+    from app.knowledge.indexer import index_document
+
+    return await index_document(get_settings(), uuid.UUID(tenant_id), uuid.UUID(document_id))
+
+
+async def knowledge_sync(ctx: dict[str, Any]) -> int:
+    """Index resolved incidents / completed investigations and retry lost index jobs."""
+    from app.knowledge.indexer import sync_backlog
+
+    return await sync_backlog(get_settings())
+
+
+async def mcp_tool_sync(ctx: dict[str, Any]) -> int:
+    """Re-sync MCP servers hourly: changed tools are disabled until re-approved."""
+    from app.services.tool_service import sync_all_mcp
+
+    return await sync_all_mcp(get_settings())
 
 
 async def discovery_scheduler(ctx: dict[str, Any]) -> int:
@@ -127,11 +154,21 @@ class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         func(run_investigation_job, name=JOB_NAME),
         func(run_discovery_job, name=DISCOVERY_JOB, max_tries=1, timeout=3600),
+        func(index_document_job, name=INDEX_JOB, max_tries=3, timeout=900),
     ]
     cron_jobs: ClassVar[list[Any]] = [
         cron(heartbeat, second={0}, run_at_startup=True),
         cron(discovery_scheduler, second={30}, run_at_startup=False, unique=True),
         cron(expire_approvals, second={15}, run_at_startup=True, unique=True),
+        cron(
+            knowledge_sync,
+            minute=set(range(2, 60, 5)),
+            second={45},
+            run_at_startup=True,
+            unique=True,
+            timeout=1800,
+        ),
+        cron(mcp_tool_sync, minute={17}, second={5}, run_at_startup=False, unique=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

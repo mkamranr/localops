@@ -36,6 +36,7 @@ PERMISSIONS: Final[dict[str, str]] = {
     # Tools & approvals (Phase 5)
     "tool.execute.readonly": "Execute read-only diagnostic tools",
     "tool.execute.remediation": "Execute remediation tools",
+    "tool.manage": "Register, enable and classify MCP and custom tools",
     "approval.read": "View approval requests",
     "approval.approve": "Approve or reject remediation actions",
     # Agents, integrations, knowledge (Phase 2/6)
@@ -82,6 +83,7 @@ SYSTEM_ROLES: Final[dict[str, tuple[str, frozenset[str]]]] = {
                 "tool.execute.remediation",
                 "approval.read",
                 "approval.approve",
+                "tool.manage",
                 "agent.read",
                 "integration.read",
                 "integration.configure",

@@ -24,7 +24,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, CreatedAtMixin, UUIDPkMixin
 
-INTEGRATION_TYPES = ("linux_ssh", "windows_winrm", "docker", "http")
+INTEGRATION_TYPES = ("linux_ssh", "windows_winrm", "docker", "http", "mcp", "http_api")
+# Integrations that provide tools rather than discover resources.
+TOOL_INTEGRATION_TYPES = ("mcp", "http_api")
 RESOURCE_TYPES = (
     "linux_server",
     "windows_server",

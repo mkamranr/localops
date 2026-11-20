@@ -23,6 +23,7 @@ from app.graphs.dispatch import InvestigationDispatcher
 from app.integrations import get_collector_factory, uses_ssh
 from app.integrations.base import CollectorError, Target, TestOutcome
 from app.models import DiscoveryRun, Integration, Resource, SshHostKey
+from app.models.inventory import TOOL_INTEGRATION_TYPES
 from app.schemas.common import PageParams
 from app.schemas.inventory import (
     IntegrationCreate,
@@ -35,6 +36,7 @@ from app.schemas.inventory import (
 )
 from app.services import audit_service as audit
 from app.services.context import ClientInfo, Principal, RequestContext
+from app.tools import catalogue as tool_catalogue
 
 ACTIVE_RUN_WINDOW = timedelta(hours=1)
 _CRED_FIELDS_KEY = "credential_fields"
@@ -224,6 +226,8 @@ async def update_integration(
         integration.schedule_minutes = changes["schedule_minutes"] = data.schedule_minutes
         integration.next_run_at = _now()
     await s.flush()
+    if changes and integration.integration_type in TOOL_INTEGRATION_TYPES:
+        tool_catalogue.invalidate(p.tenant_id)
     if changes:
         await audit.record(
             s,
@@ -249,6 +253,7 @@ async def delete_integration(ctx: RequestContext, integration_id: uuid.UUID) -> 
     )
     await s.delete(integration)
     await s.flush()
+    tool_catalogue.invalidate(p.tenant_id)
     await audit.record(
         s,
         tenant_id=p.tenant_id,
@@ -273,6 +278,40 @@ async def test_integration(
 ) -> IntegrationTestResult:
     """Connect to one target with the stored credentials. Pins the SSH host key on
     first contact (trust on first use). No DB connection is held during the probe."""
+    async with tenant_session(principal.tenant_id) as s:
+        integration = await get_integration(s, integration_id)
+        if integration.integration_type in TOOL_INTEGRATION_TYPES:
+            itype = integration.integration_type
+            config = dict(integration.configuration)
+            credentials = load_credentials(settings, integration)
+            name = integration.name
+            tool_probe = True
+        else:
+            tool_probe = False
+    if tool_probe:
+        outcome = await probe_tool_integration(settings, itype, config, credentials)
+        async with tenant_session(principal.tenant_id) as s:
+            await audit.record(
+                s,
+                tenant_id=principal.tenant_id,
+                actor=principal,
+                action="integration.test",
+                outcome="success" if outcome.ok else "failure",
+                entity_type="integration",
+                entity_id=integration_id,
+                details={
+                    "name": name,
+                    "target": config.get("url"),
+                    "message": outcome.message[:300],
+                },
+                client=client,
+            )
+        return IntegrationTestResult(
+            ok=outcome.ok,
+            target=str(config.get("url") or ""),
+            message=outcome.message,
+            details=dict(outcome.details),
+        )
     async with tenant_session(principal.tenant_id) as s:
         integration = await get_integration(s, integration_id)
         if target_in is not None:
@@ -355,6 +394,10 @@ async def start_discovery(
 ) -> DiscoveryRun:
     async with tenant_session(principal.tenant_id) as s:
         integration = await get_integration(s, integration_id)
+        if integration.integration_type in TOOL_INTEGRATION_TYPES:
+            raise ValidationFailedError(
+                "Tool integrations do not discover resources; use 'Sync tools' instead"
+            )
         if not integration.enabled:
             raise ConflictError("Integration is disabled")
         if not integration.targets:
@@ -433,3 +476,48 @@ async def reset_host_key(ctx: RequestContext, integration_id: uuid.UUID, key_id:
         details={"host": key.host, "port": key.port, "fingerprint": key.fingerprint},
         client=ctx.client,
     )
+
+
+# ------------------------------------------------------------------ tool integrations
+
+
+async def probe_tool_integration(
+    settings: Settings, itype: str, config: dict[str, Any], credentials: dict[str, Any]
+) -> TestOutcome:
+    """MCP: initialize + tools/list. HTTP API: one GET of the base URL (any status
+    below 500 proves reachability and TLS; the status is reported)."""
+    import httpx
+
+    from app.integrations import http_api
+    from app.integrations.http_api import auth_headers, verify_option
+    from app.integrations.mcp import McpClient, McpError, config_from_integration
+
+    if itype == "mcp":
+        try:
+            async with McpClient(
+                config_from_integration(config, credentials, settings.mcp_default_timeout_seconds)
+            ) as mcp:
+                tools = await mcp.list_tools()
+                server = mcp.server_info
+        except McpError as exc:
+            return TestOutcome(False, str(exc), {"code": exc.code})
+        label = " ".join(str(server.get(k, "")) for k in ("name", "version")).strip() or "server"
+        return TestOutcome(
+            True,
+            f"Connected to {label}; {len(tools)} tool(s) offered",
+            {"server": server, "tools": [t.name for t in tools[:50]]},
+        )
+    url = str(config.get("url") or "")
+    try:
+        async with httpx.AsyncClient(
+            transport=http_api._transport_override,
+            timeout=float(config.get("timeout_seconds") or 20),
+            verify=verify_option(config, credentials),
+            follow_redirects=False,
+            trust_env=False,
+        ) as http:
+            resp = await http.get(url, headers=auth_headers(config, credentials))
+    except httpx.HTTPError as exc:
+        return TestOutcome(False, f"Cannot reach {url}: {type(exc).__name__}", {})
+    ok = resp.status_code < 500
+    return TestOutcome(ok, f"{url} answered HTTP {resp.status_code}", {"status": resp.status_code})

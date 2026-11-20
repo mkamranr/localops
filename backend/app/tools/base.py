@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 if TYPE_CHECKING:
     from app.tools.context import ToolContext
@@ -29,6 +29,20 @@ class ToolError(Exception):
 
 class StrictArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class JsonArgs(StrictArgs):
+    """Arguments of a tenant-registered tool (MCP / HTTP template).
+
+    Pydantic only accepts a JSON object here; the tool's own JSON Schema (checked by
+    ``ToolSpec.validator``) decides what is valid.
+    """
+
+    model_config = ConfigDict(extra="allow", str_strip_whitespace=False)
+
+
+class ArgumentsError(ValueError):
+    """Tool arguments failed validation; the message is safe to show a model."""
 
 
 class ResourceArgs(StrictArgs):
@@ -70,6 +84,13 @@ class ToolSpec:
     describe_action: Describer | None = None
     # Read tools that show whether a change worked (verification).
     verify_with: tuple[str, ...] = ()
+    # Phase 6: tenant-registered tools (MCP servers, HTTP templates).
+    source: str = "builtin"  # builtin | mcp | http
+    input_schema: dict[str, Any] | None = None  # JSON Schema replacing the args model's
+    validator: Callable[[dict[str, Any]], None] | None = None  # raises ArgumentsError
+    required_permission: str | None = None
+    integration_id: uuid.UUID | None = None
+    definition_id: uuid.UUID | None = None
 
     @property
     def is_change(self) -> bool:
@@ -77,13 +98,35 @@ class ToolSpec:
 
     @property
     def permission(self) -> str:
+        if self.required_permission:
+            return self.required_permission
         return "tool.execute.remediation" if self.is_change else "tool.execute.readonly"
+
+    def validate_args(self, raw: dict[str, Any] | None) -> StrictArgs:
+        """Validate arguments; raises ``ArgumentsError`` with a model-readable message."""
+        try:
+            args = self.args.model_validate(dict(raw or {}))
+        except ValidationError as exc:
+            parts = []
+            for err in exc.errors()[:6]:
+                loc = ".".join(str(p) for p in err["loc"]) or "arguments"
+                parts.append(f"{loc}: {err['msg']}")
+            raise ArgumentsError("; ".join(parts)) from exc
+        if self.validator is not None:
+            self.validator(args.model_dump(mode="json"))
+        return args
+
+    def declares(self, field_name: str) -> bool:
+        """Whether the arguments model itself defines ``field_name`` (not an extra)."""
+        return field_name in self.args.model_fields
 
     @property
     def needs_resource(self) -> bool:
         return issubclass(self.args, ResourceArgs)
 
     def json_schema(self) -> dict[str, Any]:
+        if self.input_schema is not None:
+            return dict(self.input_schema)
         schema = self.args.model_json_schema()
         schema.pop("title", None)
         for prop in schema.get("properties", {}).values():
@@ -108,6 +151,7 @@ class ToolSpec:
             "resource_types": list(self.resource_types),
             "remote": self.remote,
             "kind": self.kind,
+            "source": self.source,
             "risk_level": self.default_risk if self.is_change else "read",
             "requires_approval": self.is_change,
             "permission": self.permission,

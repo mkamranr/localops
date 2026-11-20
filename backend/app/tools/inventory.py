@@ -157,7 +157,7 @@ async def similar_incidents(ctx: ToolContext, args: SimilarArgs) -> ToolOutput:
         return ToolOutput("(no matches)", "No similar past incidents or investigations")
     lines = []
     for i in items:
-        label = f"INC-{i['number']:04d}" if i["kind"] == "incident" else "investigation"
+        label = str(i["number"]) if i["kind"] == "incident" else "investigation"
         cause = i.get("root_cause") or i.get("conclusion") or "no recorded cause"
         resolution = f"; resolution: {i['resolution']}" if i.get("resolution") else ""
         lines.append(

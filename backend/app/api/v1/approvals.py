@@ -34,7 +34,7 @@ from app.schemas.remediation import (
 from app.services import approval_service as svc
 from app.services import policy_service
 from app.services.context import ClientInfo, Principal, RequestContext
-from app.tools.registry import change_tools
+from app.tools import catalogue as tool_catalogue
 
 router = APIRouter(tags=["approvals"])
 
@@ -175,10 +175,10 @@ async def list_policies(
 
 @router.get("/policies/actions")
 async def remediation_actions(
-    _: RequestContext = Depends(require_permission("settings.read")),
+    ctx: RequestContext = Depends(require_permission("settings.read")),
 ) -> list[dict[str, Any]]:
     """The registered remediation tools that policies can refer to."""
-    return [t.describe() for t in change_tools()]
+    return [t.describe() for t in (await tool_catalogue.load(ctx.session)).change_tools()]
 
 
 @router.post("/policies/preview")

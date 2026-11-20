@@ -1,4 +1,4 @@
-# Installation (Phase 5)
+# Installation (Phase 6)
 
 ## Requirements
 
@@ -110,6 +110,17 @@ Then open **AI Assistant** and describe a problem, for example *"Why is CPU high
 
 Remote tools need the `tool.execute.readonly` permission (Operator and above). Without it,
 agents use inventory data only.
+
+### Embedding model (knowledge search)
+
+For semantic knowledge search, add a second model with purpose **Embedding** and mark it
+default. For example, with Ollama run `ollama pull nomic-embed-text` on the model host and
+use base URL `http://host.docker.internal:11434` and model `nomic-embed-text`. **Test**
+reports the vector dimension.
+
+Without an embedding model, the knowledge base still works, with keyword search only. You can
+also seed the model for every tenant with `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` in `.env`.
+See [knowledge.md](knowledge.md).
 
 ## 5. Add infrastructure
 
@@ -257,7 +268,18 @@ start, stop and restart.
 Administrator* role besides the people who run investigations. By default nobody can approve
 their own request.
 
-## 8. Run the test suite (optional)
+## 8. Knowledge base and tools (Phase 6)
+
+- **Knowledge Base → Upload** a runbook (Markdown, text or PDF) and try **Search**.
+  Resolved and closed incidents are added automatically within about 5 minutes.
+- **Tools & Integrations → Add → MCP Server** with the server's Streamable HTTP URL.
+  - **Test**, then **Sync tools**.
+  - Review each tool, set *read* or *change*, and enable it.
+  - Allow read tools for an agent under **Agents → Configure**, or create a custom agent.
+- **Custom HTTP tools**: add an **HTTP API** integration (base URL and authentication), then
+  **Settings → Tools → New HTTP tool**.
+
+## 9. Run the test suite (optional)
 
 ```bash
 docker compose -f docker-compose.test.yml run --rm --build tests

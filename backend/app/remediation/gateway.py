@@ -35,15 +35,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.database.session import tenant_session
-from app.models import Approval, ExecutionJob, Investigation, Resource, User
+from app.models import Approval, ExecutionJob, Integration, Investigation, Resource, User
 from app.remediation.policy import Decision, PolicyRule, evaluate
 from app.repositories.identity import user_permissions
 from app.services import audit_service as audit
-from app.tools.base import ResourceInfo, ToolSpec
+from app.tools import catalogue as tool_catalogue
+from app.tools.base import ArgumentsError, ResourceInfo, ToolSpec
 from app.tools.context import resource_info
 from app.tools.executor import _execute
 from app.tools.redaction import redact
-from app.tools.registry import get_tool
 
 log = structlog.get_logger("localops.remediation")
 
@@ -129,16 +129,16 @@ async def prepare(
     default_ttl: int,
 ) -> PreparedAction:
     """Validate a proposed action and decide its policy (session in tenant context)."""
-    spec = get_tool(tool)
+    spec = (await tool_catalogue.load(session)).get(tool)
     if spec is None or not spec.is_change:
         raise GatewayRejectedError(f"'{tool}' is not a registered remediation tool", "unknown_tool")
     raw = dict(raw_args or {})
     try:
-        args = spec.args.model_validate(raw)
-    except ValidationError as exc:
-        raise GatewayRejectedError(
-            f"Invalid arguments: {_errors(exc)}", "invalid_arguments"
-        ) from exc
+        args = spec.validate_args(raw)
+    except ArgumentsError as exc:
+        raise GatewayRejectedError(f"Invalid arguments: {exc}", "invalid_arguments") from exc
+    if spec.source != "builtin":
+        return await _prepare_registered(session, spec, args, mode, rules, default_ttl)
     resource = await _resource(session, str(getattr(args, "resource_id", "")))
     if resource is None:
         raise GatewayRejectedError(
@@ -155,6 +155,54 @@ async def prepare(
     decision = evaluate(spec, info, rules, mode=mode, default_ttl=default_ttl)
     describe = spec.describe_action
     description = describe(args, info) if describe else f"Run {spec.name} on {resource.name}"
+    return PreparedAction(
+        spec=spec,
+        args=args,
+        arguments=args.model_dump(mode="json"),
+        resource=info,
+        description=redact(description)[:1000],
+        decision=decision,
+    )
+
+
+async def _prepare_registered(
+    session: AsyncSession,
+    spec: ToolSpec,
+    args: BaseModel,
+    mode: str,
+    rules: list[PolicyRule],
+    default_ttl: int,
+) -> PreparedAction:
+    """An MCP / HTTP change tool: its target is the integration that provides it.
+
+    The integration's configured ``environment`` feeds policy; without one it never
+    counts as non-production, so such actions never run unattended by default.
+    """
+    integration = (
+        await session.get(Integration, spec.integration_id) if spec.integration_id else None
+    )
+    if integration is None or not integration.enabled:
+        raise GatewayRejectedError(
+            "The tool's integration is missing or disabled", "unknown_resource"
+        )
+    config = dict(integration.configuration or {})
+    info = ResourceInfo(
+        id=integration.id,
+        name=integration.name,
+        resource_type="integration",
+        hostname=None,
+        ip_addresses=[],
+        integration_id=integration.id,
+        discovery_target=None,
+        facts={},
+        health_status="unknown",
+        environment=(str(config["environment"]) if config.get("environment") else None),
+        group_name=None,
+        tags=[],
+    )
+    decision = evaluate(spec, info, rules, mode=mode, default_ttl=default_ttl)
+    describe = spec.describe_action
+    description = describe(args, info) if describe else f"Run {spec.name} on {integration.name}"
     return PreparedAction(
         spec=spec,
         args=args,

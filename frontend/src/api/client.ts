@@ -77,12 +77,13 @@ export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Pr
   const send = () => {
     const token = useAuthStore.getState().accessToken;
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+    const multipart = typeof FormData !== "undefined" && opts.body instanceof FormData;
+    if (opts.body !== undefined && !multipart) headers["Content-Type"] = "application/json";
     if (token) headers.Authorization = `Bearer ${token}`;
     return fetch(buildUrl(path, opts.query), {
       method: opts.method ?? "GET",
       headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      body: multipart ? (opts.body as FormData) : opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       credentials: "same-origin",
       signal: opts.signal,
     });

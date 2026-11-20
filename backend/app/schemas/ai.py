@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -41,9 +42,13 @@ class ModelSettings(BaseModel):
     tool_calling: Literal["auto", "native", "json"] = "auto"
 
 
+Purpose = Literal["chat", "embedding"]
+
+
 class ModelEndpointCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     provider: Provider
+    purpose: Purpose = "chat"
     base_url: str = Field(max_length=500)
     model_name: str = Field(min_length=1, max_length=200)
     description: str = Field("", max_length=1000)
@@ -61,6 +66,7 @@ class ModelEndpointCreate(BaseModel):
 class ModelEndpointUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     provider: Provider | None = None
+    purpose: Purpose | None = None
     base_url: str | None = Field(None, max_length=500)
     model_name: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = Field(None, max_length=1000)
@@ -82,6 +88,7 @@ class ModelEndpointOut(ApiModel):
     provider: str
     base_url: str
     model_name: str
+    purpose: str = "chat"
     description: str
     configuration: dict[str, Any]
     has_api_key: bool = False
@@ -98,6 +105,7 @@ class ModelEndpointOut(ApiModel):
 class ModelTestResult(BaseModel):
     ok: bool
     latency_ms: float | None
+    dimensions: int | None = None  # embedding endpoints
     models: list[str]
     model_available: bool | None
     reply: str | None = None
@@ -114,6 +122,54 @@ class AgentSettings(BaseModel):
     max_tokens: int | None = Field(None, ge=64, le=32_768)
     timeout_seconds: int | None = Field(None, ge=5, le=900)
     max_retries: int | None = Field(None, ge=0, le=5)
+    # Tool-using agents only (diagnostics and custom agents).
+    allowed_tools: list[str] | None = Field(
+        None, max_length=40, description="Read tools the agent may call; [] = its defaults"
+    )
+    max_steps: int | None = Field(None, ge=1, le=15)
+    instructions: str | None = Field(
+        None,
+        max_length=2000,
+        description="Extra guidance appended after the built-in safety rules",
+    )
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def _tools(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        out = list(dict.fromkeys(t.strip() for t in v if t.strip()))
+        for name in out:
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name):
+                raise ValueError(f"'{name}' is not a tool name")
+        return out
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions(cls, v: str | None) -> str | None:
+        return v.strip() if v is not None else None
+
+
+class AgentCreate(AgentSettings):
+    """A custom tool-loop specialist."""
+
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(
+        min_length=10,
+        max_length=1000,
+        description="What the agent investigates; the supervisor plans with this text",
+    )
+    slug: str | None = Field(None, max_length=40, description="Defaults to one made from name")
+    model_id: uuid.UUID | None = None
+    enabled: bool = True
+    allowed_tools: list[str] = Field(min_length=1, max_length=40)
+
+    @field_validator("slug")
+    @classmethod
+    def _slug(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", v):
+            raise ValueError("use lowercase letters, digits and underscores")
+        return v
 
 
 class AgentStats(BaseModel):
@@ -122,6 +178,8 @@ class AgentStats(BaseModel):
     avg_duration_ms: float | None = None
     tokens_24h: int = 0
     last_run_at: datetime | None = None
+    executions_total: int = 0
+    success_rate: float | None = None  # over all recorded executions
 
 
 class AgentOut(BaseModel):
@@ -137,6 +195,8 @@ class AgentOut(BaseModel):
     available_in_phase: int
     implemented: bool
     specialist: bool
+    custom: bool = False
+    uses_tools: bool = False  # allowed_tools / max_steps / instructions apply
     stats: AgentStats
     updated_at: datetime | None
 

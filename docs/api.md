@@ -1,4 +1,4 @@
-# REST API (Phase 5)
+# REST API (Phase 6)
 
 Base path: `/api/v1`. Interactive OpenAPI docs are at `/api/v1/docs` when `APP_ENV` is not
 `production`.
@@ -28,13 +28,15 @@ the refresh token is set as an `httpOnly` cookie.
 | GET | `/dashboard/summary` | `dashboard.read` | Counts + service health, including open incidents and pending approvals |
 | GET | `/dashboard/activity?limit=` | `dashboard.read` + `audit.read` | |
 | GET | `/models` · `/models/{id}` | `settings.read` | API keys are never returned (`has_api_key`) |
-| POST | `/models` | `settings.manage` | First model becomes the default |
+| POST | `/models` | `settings.manage` | `purpose`: `chat` (default) or `embedding`; the first model of each purpose becomes its default |
 | PUT/DELETE | `/models/{id}` | `settings.manage` | `is_default`, `enabled`, `api_key`/`clear_api_key`; delete unpins agents |
-| POST | `/models/{id}/test` | `settings.manage` | Lists server models + 1-token probe; stores health |
-| GET | `/agents` · `/agents/{id}` | `agent.read` | Config, availability phase, 24 h stats |
-| PUT | `/agents/{id}` | `agent.configure` | `model_id` (null = default), `enabled`, `configuration` |
+| POST | `/models/{id}/test` | `settings.manage` | Lists server models + 1-token probe (embedding models: embeds a probe and reports `dimensions`); stores health |
+| GET | `/agents` · `/agents/{id}` | `agent.read` | Config, `custom`, `uses_tools`, 24 h and all-time stats (count, success rate, last run) |
+| PUT | `/agents/{id}` | `agent.configure` | `model_id` (null = default, chat models only), `enabled`, `configuration` (`temperature`, `max_tokens`, `timeout_seconds`, `max_retries`; for tool-using agents also `allowed_tools` (read tools), `max_steps` 1–15, `instructions` ≤ 2000) |
+| POST | `/agents` | `agent.configure` | Custom agent: `{name, description, slug?, model_id?, allowed_tools[≥1], instructions?, max_steps?, …}` (201) |
+| DELETE | `/agents/{id}` | `agent.configure` | Custom agents only (409 for built-in agents) |
 | POST | `/agents/{id}/enable` · `/disable` | `agent.configure` | |
-| GET | `/agents/executions?agent_type=&investigation_id=` | `agent.read` | Paginated execution records |
+| GET | `/agents/executions?agent_type=&investigation_id=&status=&errors_only=` | `agent.read` | Paginated execution records |
 | POST | `/investigations` | `incident.investigate` | `{request, title?, execution_mode, resource_ids?, incident_id?, investigation_type?}` → 202, queued. Explicit resources count as resolved |
 | GET | `/investigations?status=&active=&q=` | `incident.read` | Paginated; completed items carry a `report` brief (conclusion, root cause, confidence) |
 | GET | `/investigations/{id}` | `incident.read` | Includes `result` (report) |
@@ -55,8 +57,26 @@ the refresh token is set as an `httpOnly` cookie.
 | POST | `/incidents/{id}/comments` | `incident.update` | `{body}` |
 | GET | `/incidents/{id}/similar` | `incident.read` | Past incidents and investigations by text and shared resources |
 | GET | `/incidents/{id}/tool-executions` | `incident.read` | Tool runs from the linked investigations |
-| GET | `/tools?resource_type=` | `incident.read` | The tool catalogue with argument schemas; `kind` is `read` or `change` |
-| POST | `/tools/{name}/run` | `tool.execute.readonly` | Read tools only: `{resource_id, arguments}` → status, summary, redacted output (audited) |
+| GET | `/tools?resource_type=` | `incident.read` | The tenant's catalogue: built-in plus enabled MCP and HTTP tools; `kind` is `read` or `change`, `source` is `builtin`, `mcp` or `http` |
+| POST | `/tools/{name}/run` | `tool.execute.readonly` + the tool's permission | Read tools only: `{resource_id?, arguments}` → status, summary, redacted output (audited). Registered tools take no `resource_id` |
+| GET | `/tools/definitions?integration_id=&source=&status=` · `/tools/definitions/{id}` | `integration.read` | Registered tools, including disabled ones, with `status` and `usable` |
+| PUT | `/tools/definitions/{id}` | `tool.manage` | `{description, kind, risk_level, required_permission, timeout_seconds, verify_with, clear_verify_with, enabled, approve_schema}`. Change tools always require `tool.execute.remediation`; 409 when enabling a changed or missing tool |
+| POST | `/tools/definitions` | `tool.manage` | Create an HTTP tool: `{integration_id, name, description, parameters[], template{method, path, query, headers, body}, kind, risk_level, timeout_seconds, verify_with, enabled}` |
+| PUT | `/tools/definitions/{id}/http` | `tool.manage` | Edit an HTTP tool's description, parameters or template |
+| DELETE | `/tools/definitions/{id}` | `tool.manage` | Remove a registered tool |
+| POST | `/tools/definitions/{id}/test` | `tool.manage` | Run an enabled read tool once: `{arguments}` |
+| POST | `/integrations/{id}/sync-tools` | `tool.manage` | MCP `tools/list` → `{server, total, added, changed, missing, unchanged}` |
+| GET | `/knowledge?q=&document_type=&status=&source=&tag=&index_status=` | `knowledge.read` | Paginated documents |
+| GET | `/knowledge/stats` | `knowledge.read` | Counts by type, status and index status; embedding model; vector store status |
+| POST | `/knowledge/search` | `knowledge.read` | `{query, document_types?, resource_id?, tags?, include_deprecated?, limit?}` → `{mode, note, hits[{…, match}]}` |
+| POST | `/knowledge` | `knowledge.manage` | `{title, document_type, content, category?, tags?, resource_ids?, status?}` (201) |
+| POST | `/knowledge/upload` | `knowledge.manage` | Multipart: `file` plus optional `title`, `document_type`, `category`, `tags`, `resource_ids` (comma-separated) and `status` |
+| GET · PUT · DELETE | `/knowledge/{id}` | `knowledge.read` / `.manage` | Detail with chunks; a title or content change creates a version; generated documents allow only status, tags and category |
+| GET | `/knowledge/{id}/versions` · `/versions/{n}` | `knowledge.read` | Version history |
+| POST | `/knowledge/{id}/versions/{n}/restore` | `knowledge.manage` | Restore as a new version |
+| POST | `/knowledge/{id}/validate` | `knowledge.manage` | `{validated}` |
+| POST | `/knowledge/{id}/feedback` | `knowledge.read` | `{helpful, comment?, chunk_id?, investigation_id?}`; one vote per user (204) |
+| POST | `/knowledge/reindex` | `knowledge.manage` | `{document_ids?}` → `{queued}` |
 | GET | `/approvals?status=&risk=&mine=&investigation_id=&incident_id=` | `approval.read` | Paginated approval requests |
 | GET | `/approvals/summary` | `approval.read` | Pending count, by risk, mine, expiring soon |
 | GET | `/approvals/{id}` | `approval.read` | Includes cited evidence, `can_decide` and the execution |

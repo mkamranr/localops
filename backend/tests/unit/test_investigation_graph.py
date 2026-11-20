@@ -132,6 +132,16 @@ class MemoryRuntime(InvestigationRuntime):
     async def remediation_context(self) -> dict[str, Any]:
         return {"requester_id": None, "can_remediate": False, "mode": "assisted", "enabled": True}
 
+    async def plannable_agents(self) -> list[Any]:
+        from app.agents.supervisor import catalogue_agents
+
+        return catalogue_agents()
+
+    async def tool_catalogue(self) -> Any:
+        from app.tools.catalogue import BUILTIN
+
+        return BUILTIN
+
     async def in_session(self, fn: Any) -> Any:
         return Assessment(note="No history in the in-memory runtime")
 

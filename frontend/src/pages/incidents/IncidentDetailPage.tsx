@@ -24,6 +24,7 @@ import {
 import { RcaReport } from "@/components/investigation/RcaReport";
 import { IncidentRemediation } from "@/components/remediation/History";
 import { ToolExecutionsTable } from "@/components/investigation/ToolExecutionsTable";
+import { MatchBadge } from "@/components/knowledge/shared";
 import { InvestigationStatusBadge, ROOT_CAUSE_META } from "@/components/investigation/shared";
 import { HealthBadge, TypeIcon } from "@/components/inventory/shared";
 import { Button } from "@/components/ui/button";
@@ -344,6 +345,7 @@ function Related({ inc }: { inc: IncidentDetail }) {
                 <div className="flex items-center gap-2 text-sm">
                   <span className="font-mono text-xs text-subtle">{s.number ?? "Investigation"}</span>
                   <span className="flex-1 truncate font-medium">{s.title}</span>
+                  {s.match && <MatchBadge match={s.match} />}
                   <Badge>{s.status}</Badge>
                 </div>
                 {(s.root_cause || s.resolution || s.conclusion) && (

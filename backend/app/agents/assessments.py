@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.diagnostics import COVERAGE
 from app.agents.toolloop import AgentFindings, Hypothesis, Observation
+from app.core.config import Settings
+from app.knowledge.search import hybrid_search
 from app.models import OPEN_STATUSES, Incident, IncidentResource, Resource, incident_key
 from app.services import knowledge_search
 from app.services import resource_service as rs
@@ -83,6 +85,8 @@ async def _open_incidents(
 
 # ---------------------------------------------------------------------- knowledge
 
+RUNBOOK_TYPES = ("runbook", "troubleshooting", "procedure", "documentation")
+
 
 async def knowledge(
     session: AsyncSession,
@@ -92,6 +96,8 @@ async def knowledge(
     *,
     exclude_investigation: uuid.UUID | None = None,
     exclude_incident: uuid.UUID | None = None,
+    settings: Settings | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> Assessment:
     ids = _ids(resources)
     incidents = await knowledge_search.similar_incidents(
@@ -100,7 +106,7 @@ async def knowledge(
     investigations = await knowledge_search.similar_investigations(
         session, text, ids, exclude_id=exclude_investigation, limit=3
     )
-    result = Assessment(note="No similar past incidents or investigations were found")
+    result = Assessment()
     observations: list[Observation] = []
     for item in [*incidents, *investigations]:
         eid = f"{prefix}.{len(result.evidence) + 1}"
@@ -132,16 +138,81 @@ async def knowledge(
             }
         )
         observations.append(Observation(statement=summary[:500], evidence_ids=[eid]))
+
+    # Runbooks, troubleshooting guides and documentation for these symptoms.
+    runbooks: list[dict[str, Any]] = []
+    search_note: str | None = None
+    if settings is not None and tenant_id is not None:
+        found = await hybrid_search(
+            session,
+            settings,
+            tenant_id,
+            text,
+            document_types=list(RUNBOOK_TYPES),
+            boost_resources=ids,
+            limit=3,
+            per_document=1,
+        )
+        search_note = found.note
+        for hit in found.hits:
+            eid = f"{prefix}.{len(result.evidence) + 1}"
+            where = f" — {hit.heading}" if hit.heading else ""
+            summary = f"{hit.document_type.title()} “{hit.title}” v{hit.version}{where}" + (
+                " (validated)" if hit.validated else ""
+            )
+            runbooks.append({**hit.as_dict(), "evidence_id": eid})
+            result.evidence.append(
+                {
+                    "id": eid,
+                    "source": "knowledge",
+                    "agent": "knowledge",
+                    "tool": "search_knowledge",
+                    "resource": None,
+                    "summary": summary[:500],
+                    "excerpt": hit.content[:1500],
+                    "ok": True,
+                    "ref": {
+                        "kind": "document",
+                        "id": str(hit.document_id),
+                        "chunk_id": str(hit.chunk_id),
+                        "version": hit.version,
+                    },
+                    "score": round(hit.score, 4),
+                    "match": hit.match,
+                    "observed_at": None,
+                }
+            )
+            observations.append(
+                Observation(statement=f"Relevant procedure: {summary}"[:500], evidence_ids=[eid])
+            )
     if result.evidence:
+        parts = []
+        if incidents or investigations:
+            parts.append(
+                f"{len(incidents)} similar incident(s) and {len(investigations)} similar "
+                "investigation(s) found"
+            )
+        if runbooks:
+            parts.append(f"{len(runbooks)} relevant knowledge document(s)")
+        solutions = [i["resolution"] for i in incidents if i.get("resolution")][:3]
+        reuse = f" Earlier resolutions: {'; '.join(solutions)}." if solutions else ""
         result.findings = AgentFindings(
             summary=(
-                f"{len(incidents)} similar incident(s) and {len(investigations)} similar "
-                "investigation(s) found. Past causes are context, not proof for this case."
-            ),
+                f"{' and '.join(parts)}.{reuse} Past causes and runbooks are context, not "
+                "proof for this case."
+            )[:1500],
             observations=observations,
         )
-        result.note = "Runbook search arrives with the knowledge base (phase 6)"
-    result.data = {"similar_incidents": incidents, "similar_investigations": investigations}
+        result.note = search_note
+    elif search_note:
+        result.note = f"No similar incidents or documents found ({search_note})"
+    else:
+        result.note = "No similar past incidents, investigations or documents were found"
+    result.data = {
+        "similar_incidents": incidents,
+        "similar_investigations": investigations,
+        "runbooks": runbooks,
+    }
     return result
 
 

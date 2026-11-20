@@ -65,6 +65,14 @@ export const INTEGRATION_META: Record<IntegrationType, { label: string; descript
     label: "HTTP checks",
     description: "Status, latency and certificate expiry of web endpoints.",
   },
+  mcp: {
+    label: "MCP Server",
+    description: "Tools from a Model Context Protocol server over HTTP; each tool is reviewed before use.",
+  },
+  http_api: {
+    label: "HTTP API",
+    description: "Custom HTTP request tools against a REST API, defined as safe templates.",
+  },
 };
 
 export function HealthBadge({ status, stale }: { status: HealthStatus; stale?: boolean }) {

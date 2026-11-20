@@ -35,7 +35,6 @@ from app.agents.catalogue import get_spec
 from app.graphs.runtime import AgentUnavailableError, InvestigationRuntime, NodeCall
 from app.llm.gateway import ModelError
 from app.remediation.gateway import GatewayRejectedError
-from app.tools.registry import TOOLS, change_tools
 
 NodeFn = Callable[[Any, NodeCall], Awaitable[dict[str, Any]]]
 Instrument = Callable[[str, str, NodeFn], Callable[[Any], Any]]
@@ -80,6 +79,11 @@ def _stop_rest(rem: dict[str, Any], reason: str) -> dict[str, Any]:
         for s in rem.get("steps", [])
     ]
     return {**rem, "steps": steps, "status": "stopped", "reason": reason}
+
+
+def _live(evidence: list[dict[str, Any]]) -> set[str]:
+    """Evidence about the current system (not knowledge-base text)."""
+    return {e["id"] for e in evidence if e.get("id") and e.get("source") != "knowledge"}
 
 
 def _cited(evidence: list[dict[str, Any]], ids: list[str]) -> list[dict[str, Any]]:
@@ -130,7 +134,7 @@ def build_remediation_nodes(
         }
         analysis = state.get("rca") or {}
         resources = state.get("resources", [])
-        tools = planner.applicable_tools(change_tools(), resources)
+        tools = planner.applicable_tools((await rt.tool_catalogue()).change_tools(), resources)
         spec = get_spec("remediation_planner")
         binding = await rt.bind_agent("remediation_planner")
         reason: str | None = None
@@ -179,7 +183,7 @@ def build_remediation_nodes(
             if proposed.tool not in allowed:
                 notes.append(f"{proposed.tool}: dropped, not a registered remediation tool here")
                 continue
-            if note := planner.check_citations(proposed, known):
+            if note := planner.check_citations(proposed, known, _live(evidence)):
                 notes.append(note)
                 continue
             try:
@@ -246,7 +250,9 @@ def build_remediation_nodes(
             return {"remediation": _replace(rem, dropped)}
         binding = await rt.bind_agent("remediation_planner")
         evidence = _evidence(state)
-        tools = planner.applicable_tools(change_tools(), state.get("resources", []))
+        tools = planner.applicable_tools(
+            (await rt.tool_catalogue()).change_tools(), state.get("resources", [])
+        )
         previous = {k: step.get(k) for k in ("tool", "arguments", "rationale", "expected_impact")}
         try:
             plan = await rt.structured(
@@ -276,7 +282,9 @@ def build_remediation_nodes(
             p = plan.steps[0]
             if p.tool not in {t.name for t in tools}:
                 reason = f"Revision used an unavailable tool ({p.tool})"
-            elif note := planner.check_citations(p, {e["id"] for e in evidence if e.get("id")}):
+            elif note := planner.check_citations(
+                p, {e["id"] for e in evidence if e.get("id")}, _live(evidence)
+            ):
                 reason = note
             else:
                 try:
@@ -421,10 +429,15 @@ def build_remediation_nodes(
         checks = verification.checks_for(
             step["tool"], tuple(step.get("verify_with") or ()), step["arguments"]
         )
+        catalogue = await rt.tool_catalogue()
         for n, check in enumerate(checks, start=1):
-            spec = TOOLS.get(check.tool)
-            if spec is None:
+            spec = catalogue.get(check.tool)
+            if spec is None or spec.is_change:
                 continue
+            if spec.source != "builtin":
+                # A registered read tool verifies with the step's matching arguments.
+                props = (spec.json_schema().get("properties") or {}).keys()
+                check.arguments = {k: v for k, v in step["arguments"].items() if k in props}
             result = await rt.run_tool(
                 check.tool,
                 check.arguments,

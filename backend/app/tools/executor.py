@@ -22,10 +22,10 @@ from app.core.config import Settings
 from app.database.session import tenant_session
 from app.models import Resource, ToolExecution
 from app.services import audit_service as audit
-from app.tools.base import ResourceInfo, ToolError, ToolSpec
+from app.tools import catalogue as tool_catalogue
+from app.tools.base import ArgumentsError, ResourceInfo, ToolError, ToolSpec
 from app.tools.context import ToolContext, resource_info
 from app.tools.redaction import cap, redact
-from app.tools.registry import TOOLS
 
 log = structlog.get_logger("localops.tools")
 
@@ -105,10 +105,21 @@ async def run_tool(
     actor: str | None = None,
     user_id: uuid.UUID | None = None,
     evidence_id: str | None = None,
+    catalogue: tool_catalogue.Catalogue | None = None,
+    permissions: set[str] | None = None,
 ) -> ToolRunResult:
+    """``permissions``: the caller's permission codes, when a user runs the tool directly
+    (each tool may require its own permission). Agents are limited by ``allowed``."""
     start = time.perf_counter()
-    spec = TOOLS.get(name)
-    allowed_names = {s.name for s in allowed} if allowed is not None else None
+    allowed_by_name = {s.name: s for s in allowed} if allowed is not None else None
+    if allowed_by_name is not None and name in allowed_by_name:
+        spec: ToolSpec | None = allowed_by_name[name]
+    else:
+        cat = catalogue or await tool_catalogue.for_tenant(tenant_id)
+        spec = cat.get(name)
+        if allowed_by_name is None:
+            catalogue = cat
+    allowed_names = set(allowed_by_name) if allowed_by_name is not None else None
     raw_args = dict(raw_args or {})
 
     def reject(message: str, code: str, **extra: Any) -> ToolRunResult:
@@ -132,19 +143,24 @@ async def run_tool(
             "change_tool",
         )
     elif spec is None or (allowed_names is not None and name not in allowed_names):
-        choices = ", ".join(
-            sorted(allowed_names or (n for n, t in TOOLS.items() if not t.is_change))
-        )
+        names = allowed_names or {
+            t.name for t in (catalogue or tool_catalogue.BUILTIN).read_tools()
+        }
         result = reject(
-            f"Unknown or unavailable tool '{name}'. Available: {choices}", "unknown_tool"
+            f"Unknown or unavailable tool '{name}'. Available: {', '.join(sorted(names))}",
+            "unknown_tool",
+        )
+    elif permissions is not None and spec.permission not in permissions:
+        result = reject(
+            f"Running {name} requires the {spec.permission} permission", "not_permitted"
         )
     else:
         try:
-            args = spec.args.model_validate(raw_args)
-        except ValidationError as exc:
-            result = reject(f"Invalid arguments: {_validation_message(exc)}", "invalid_arguments")
+            args = spec.validate_args(raw_args)
+        except ArgumentsError as exc:
+            result = reject(f"Invalid arguments: {exc}", "invalid_arguments")
         else:
-            ref = getattr(args, "resource_id", None)
+            ref = getattr(args, "resource_id", None) if spec.declares("resource_id") else None
             if ref:
                 resource = await _find_resource(tenant_id, str(ref))
             if spec.remote and not allow_remote:
@@ -165,7 +181,7 @@ async def run_tool(
             ):
                 fitting = sorted(
                     t.name
-                    for t in (allowed or [s for s in TOOLS.values() if not s.is_change])
+                    for t in (allowed or tool_catalogue.BUILTIN.read_tools())
                     if resource.resource_type in t.resource_types
                 )
                 result = reject(

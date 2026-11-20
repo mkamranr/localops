@@ -40,13 +40,12 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send, interrupt
 
 from app.agents import assessments, rca, supervisor
-from app.agents.catalogue import get_spec
+from app.agents.catalogue import is_custom
 from app.agents.diagnostics import ROLES, TOOL_LOOP_AGENTS
 from app.agents.toolloop import AgentFindings, LoopDeps, LoopSpec, run_tool_loop
 from app.graphs import remediation_nodes as remediation
 from app.graphs.runtime import AgentUnavailableError, InvestigationRuntime, NodeCall
 from app.llm.gateway import ModelError
-from app.tools.registry import tools_for_agent
 
 WORKFLOW_ID = "incident_investigation.v1"
 DEFAULT_QUESTION = "Which system, service or symptom should I investigate?"
@@ -189,18 +188,21 @@ def build_graph(
         binding = await rt.bind_agent("supervisor")
         classification = supervisor.Classification.model_validate(state["classification"])
         resources = state.get("resources", [])
+        agents = await rt.plannable_agents()
+        available = {a.agent_type for a in agents}
         plan = await rt.structured(
             call,
             binding,
-            supervisor.plan_messages(state["request"], classification, resources),
+            supervisor.plan_messages(state["request"], classification, resources, agents),
             supervisor.TaskPlan,
             example=supervisor.PLAN_EXAMPLE,
         )
         planned = supervisor.ensure_coverage(
-            supervisor.sanitise_plan(plan),
+            supervisor.sanitise_plan(plan, allowed=available),
             resources,
             classification.request_type,
             triage=bool(state.get("incident_id")),
+            available=available,
         )
         tasks = [{"id": f"task-{i + 1}", **t.model_dump()} for i, t in enumerate(planned)]
         await rt.emit("supervisor.plan_created", "supervisor", {"tasks": tasks})
@@ -225,11 +227,11 @@ def build_graph(
         await rt.check_cancelled()
         task = payload["task"]
         agent = task["agent"]
-        spec = get_spec(agent)
         binding = await rt.bind_agent(agent)
-        executor = executors.get(agent)
-        if spec is None or not spec.implemented:
-            phase = spec.available_in_phase if spec else None
+        spec = binding.spec
+        executor = executors.get(agent) or (run_diagnostics if is_custom(agent) else None)
+        if not spec.implemented:
+            phase = spec.available_in_phase
             reason = f"Agent not available yet (planned for phase {phase})"
         elif not binding.enabled:
             reason = "Agent is disabled"
@@ -350,7 +352,8 @@ def build_graph(
     ) -> dict[str, Any]:
         agent = task["agent"]
         binding = await rt.bind_agent(agent)
-        tools = tools_for_agent(agent, binding.config.get("allowed_tools") or None)
+        catalogue = await rt.tool_catalogue()
+        tools = catalogue.for_agent(agent, binding.config.get("allowed_tools") or None)
         allow_remote = bool(payload.get("allow_remote", True))
         spec = LoopSpec(
             agent_type=agent,
@@ -360,9 +363,10 @@ def build_graph(
             resources=payload.get("resources") or [],
             tools=tools,
             evidence_prefix=evidence_prefix(task["id"]),
-            max_steps=int(binding.config.get("max_steps", 6)),
-            role=ROLES.get(agent, ""),
+            max_steps=min(max(int(binding.config.get("max_steps") or 6), 1), 15),
+            role=ROLES.get(agent) or binding.spec.description[:400],
             allow_remote=allow_remote,
+            instructions=str(binding.config.get("instructions") or ""),
         )
         budget = await rt.tool_budget()
 
@@ -415,6 +419,8 @@ def build_graph(
                 evidence_prefix(task["id"]),
                 exclude_investigation=rt.investigation_id,
                 exclude_incident=uuid.UUID(incident) if incident else None,
+                settings=rt.settings,
+                tenant_id=rt.tenant_id,
             )
         )
         return result.as_finding(task["id"], "knowledge")
@@ -790,6 +796,7 @@ def build_report(state: InvestigationState) -> dict[str, Any]:
         "triage": triage,
         "similar_incidents": (knowledge or {}).get("similar_incidents", []),
         "similar_investigations": (knowledge or {}).get("similar_investigations", []),
+        "runbooks": (knowledge or {}).get("runbooks", []),
         "conclusion": _conclusion(c, root, evidence, findings) + _remediation_note(rem),
         "recommended_next_steps": next_steps,
     }

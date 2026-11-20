@@ -26,6 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database.base import Base, CreatedAtMixin, UUIDPkMixin
 
 PROVIDERS = ("vllm", "ollama", "llamacpp", "openai_compatible")
+PURPOSES = ("chat", "embedding")
 INVESTIGATION_STATUSES = (
     "queued",
     "running",
@@ -50,10 +51,12 @@ class ModelEndpoint(UUIDPkMixin, CreatedAtMixin, Base):
         UniqueConstraint("id", "tenant_id", name="uq_model_endpoints_id_tenant"),
         ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="RESTRICT"),
         CheckConstraint(f"provider IN {PROVIDERS!r}", name="provider"),
-        # At most one default model per tenant.
+        CheckConstraint(f"purpose IN {PURPOSES!r}", name="purpose"),
+        # At most one default model per tenant and purpose.
         Index(
             "uq_model_endpoints_default",
             "tenant_id",
+            "purpose",
             unique=True,
             postgresql_where="is_default",
         ),
@@ -64,6 +67,9 @@ class ModelEndpoint(UUIDPkMixin, CreatedAtMixin, Base):
     provider: Mapped[str] = mapped_column(String(30), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     model_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    purpose: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="chat", default="chat"
+    )
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     configuration: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="{}", default=dict

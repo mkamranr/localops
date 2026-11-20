@@ -1,4 +1,4 @@
-import { Building2, Cpu, KeyRound, Scale, Shield, Users } from "lucide-react";
+import { Building2, Cpu, KeyRound, Scale, Shield, Users, Wrench } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
 import { cn } from "@/utils/cn";
@@ -8,6 +8,7 @@ const SECTIONS = [
   { to: "users", label: "Users", icon: Users, permission: "user.read" },
   { to: "roles", label: "Roles & Permissions", icon: Shield, permission: "role.read" },
   { to: "models", label: "AI Models", icon: Cpu, permission: "settings.read" },
+  { to: "tools", label: "Tools", icon: Wrench, permission: "integration.read" },
   { to: "policies", label: "Remediation Policies", icon: Scale, permission: "settings.read" },
   { to: "tenants", label: "Tenants", icon: Building2, permission: "tenant.manage" },
 ];

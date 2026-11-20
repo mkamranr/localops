@@ -140,6 +140,7 @@ class SimilarIncident(BaseModel):
     conclusion: str | None = None
     created_at: str
     score: float
+    match: str | None = None  # keyword | semantic | both
 
 
 class IncidentStats(BaseModel):
@@ -175,16 +176,17 @@ class ToolOut(BaseModel):
     risk_level: str
     requires_approval: bool
     remote: bool
-    timeout_seconds: int
+    timeout_seconds: float
     resource_types: list[str]
     input_schema: dict[str, Any]
     kind: str = "read"
+    source: str = "builtin"
     permission: str = "tool.execute.readonly"
     verify_with: list[str] = Field(default_factory=list)
 
 
 class ToolRunRequest(BaseModel):
-    resource_id: uuid.UUID
+    resource_id: uuid.UUID | None = None  # registered (MCP / HTTP) tools take none
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 

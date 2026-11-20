@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 
 from app.schemas.common import ApiModel
 
-IntegrationType = Literal["linux_ssh", "windows_winrm", "docker", "http"]
+IntegrationType = Literal["linux_ssh", "windows_winrm", "docker", "http", "mcp", "http_api"]
 ResourceType = Literal[
     "linux_server",
     "windows_server",
@@ -87,6 +87,13 @@ class IntegrationSettings(BaseModel):
     # http
     expected_status: list[int] = Field(default_factory=list, max_length=20)
     slow_ms: int = Field(2000, ge=50, le=120_000)
+    # mcp / http_api (tool integrations)
+    url: str | None = Field(None, max_length=500)
+    mcp_transport: Literal["auto", "streamable_http", "sse"] = "auto"
+    auth_type: Literal["none", "bearer", "basic", "header"] = "none"
+    auth_header: str | None = Field(None, max_length=64)
+    # Environment of what the tools act on (feeds remediation policy, e.g. "production").
+    environment: str | None = Field(None, max_length=50)
 
     @field_validator("username")
     @classmethod
@@ -97,6 +104,25 @@ class IntegrationSettings(BaseModel):
         if v and not re.fullmatch(r"[\w.@\\-]{1,100}", v):
             raise ValueError("contains unsupported characters")
         return v or None
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        v = v.strip()
+        if not re.fullmatch(r"https?://[^\s/?#]+(/[^\s?#]*)?", v):
+            raise ValueError("must be an http(s) URL without query or fragment")
+        return v
+
+    @field_validator("auth_header")
+    @classmethod
+    def _auth_header(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", v.strip()):
+            raise ValueError("must be a header name (letters, digits, dashes)")
+        return v.strip()
 
     @field_validator("expected_status")
     @classmethod
@@ -117,6 +143,7 @@ class IntegrationCredentials(BaseModel):
     ca: SecretStr | None = None
     cert: SecretStr | None = None
     key: SecretStr | None = None
+    token: SecretStr | None = None  # mcp / http_api bearer token or header value
 
     def plain(self) -> dict[str, str]:
         return {
@@ -129,6 +156,16 @@ class IntegrationCredentials(BaseModel):
 def check_type_rules(
     integration_type: str, settings: IntegrationSettings, targets: list[TargetIn]
 ) -> None:
+    if integration_type in ("mcp", "http_api"):
+        if not settings.url:
+            raise ValueError("A server URL is required")
+        if targets:
+            raise ValueError("Tool integrations use a URL, not discovery targets")
+        if settings.auth_type == "header" and not settings.auth_header:
+            raise ValueError("Header authentication needs a header name")
+        if settings.auth_type == "basic" and not settings.username:
+            raise ValueError("Basic authentication needs a username")
+        return
     for t in targets:
         if integration_type == "http":
             if not t.host.startswith(("http://", "https://")):

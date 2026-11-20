@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -72,6 +74,35 @@ class FakeLLM:
     # Remediation Planner replies, used in order (the last one repeats)
     remediation_plans: list[dict[str, Any]] = field(default_factory=list)
     planner_prompts: list[str] = field(default_factory=list)
+    # Embeddings: deterministic hashed bag of words, so shared words mean similarity.
+    embed_dims: int = 64
+    embed_fail_status: int | None = None
+    embed_inputs: list[str] = field(default_factory=list)
+    prompts: list[str] = field(default_factory=list)  # every system + user prompt seen
+
+    def embedding(self, text: str) -> list[float]:
+        vec = [0.0] * self.embed_dims
+        for word in re.findall(r"[a-z0-9]{3,}", text.lower()):
+            h = int(hashlib.sha256(word.encode()).hexdigest()[:8], 16)
+            vec[h % self.embed_dims] += 1.0
+        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+        return (
+            [x / norm for x in vec]
+            if any(vec)
+            else [1.0 / math.sqrt(self.embed_dims)] * self.embed_dims
+        )
+
+    def _embeddings(self, request: httpx.Request) -> httpx.Response:
+        if self.embed_fail_status:
+            return httpx.Response(self.embed_fail_status, json={"error": {"message": "down"}})
+        body = json.loads(request.content)
+        inputs = body["input"] if isinstance(body["input"], list) else [body["input"]]
+        self.embed_inputs.extend(inputs)
+        data = [
+            {"object": "embedding", "index": i, "embedding": self.embedding(t)}
+            for i, t in enumerate(inputs)
+        ]
+        return httpx.Response(200, json={"object": "list", "data": data, "model": body["model"]})
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -190,6 +221,8 @@ class FakeLLM:
             return httpx.Response(200, json={"models": [{"name": m} for m in self.models]})
         if path.endswith("/v1/models"):
             return httpx.Response(200, json={"data": [{"id": m} for m in self.models]})
+        if path.endswith("/v1/embeddings"):
+            return self._embeddings(request)
         if not path.endswith("/v1/chat/completions"):
             return httpx.Response(404, json={"error": "not found"})
         if self.fail_status:
@@ -203,6 +236,7 @@ class FakeLLM:
             )
         system = " ".join(m["content"] for m in body["messages"] if m["role"] == "system")
         user = "\n".join(m["content"] or "" for m in body["messages"] if m["role"] == "user")
+        self.prompts.append(system + "\n" + user)
         if "calling the read-only diagnostic tools" in system:
             if "tools" in body and not self.native_tools:
                 return httpx.Response(400, json={"error": {"message": "tools are not supported"}})

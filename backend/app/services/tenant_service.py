@@ -20,7 +20,7 @@ from app.schemas.identity import TenantCreate, TenantUpdate
 from app.services import audit_service as audit
 from app.services.agent_service import ensure_agents
 from app.services.context import RequestContext
-from app.services.model_service import ensure_env_default_model
+from app.services.model_service import ensure_env_default_model, ensure_env_embedding_model
 from app.services.policy_service import ensure_policies
 
 
@@ -281,4 +281,5 @@ async def seed_ai_defaults(session: AsyncSession, tenant_id: uuid.UUID) -> tuple
     added = await ensure_agents(session, tenant_id)
     await ensure_policies(session, tenant_id)
     model = await ensure_env_default_model(session, get_settings(), tenant_id)
+    await ensure_env_embedding_model(session, get_settings(), tenant_id)
     return added, model

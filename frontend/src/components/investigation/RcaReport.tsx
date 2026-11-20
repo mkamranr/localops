@@ -34,6 +34,7 @@ import { HealthBadge } from "@/components/inventory/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Alert, Badge, Panel } from "@/components/ui/display";
+import { MatchBadge } from "@/components/knowledge/shared";
 import type { EvidenceItem, InvestigationDetail } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { formatDateTime, formatRelative } from "@/utils/format";
@@ -120,6 +121,8 @@ function EvidenceDrawer({
             <p className="text-xs">
               {item.ref.kind === "incident" ? (
                 <Link className="text-blue-300 hover:underline" to={`/incidents/${item.ref.id}`}>Open {item.ref.number}</Link>
+              ) : item.ref.kind === "document" ? (
+                <Link className="text-blue-300 hover:underline" to={`/knowledge/${item.ref.id}`}>Open knowledge document</Link>
               ) : (
                 <Link className="text-blue-300 hover:underline" to={`/investigations/${item.ref.id}`}>Open investigation</Link>
               )}
@@ -424,6 +427,7 @@ export function RcaReport({ inv, printable = false }: { inv: InvestigationDetail
                 <CheckCircle2 className="size-3.5 text-subtle" />
                 <span className="font-mono text-subtle">{s.number ?? "INV"}</span>
                 <span className="flex-1 truncate">{s.title}</span>
+                {s.match && <MatchBadge match={s.match} />}
                 <span className="truncate text-muted">{s.root_cause ?? s.resolution ?? s.conclusion ?? ""}</span>
               </Link>
             ))}

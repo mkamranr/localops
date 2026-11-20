@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -9,13 +10,34 @@ from typing import Any
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.catalogue import CATALOGUE, DEFAULT_AGENT_CONFIG, get_spec, merged_config
-from app.core.errors import AppError, NotFoundError
+from app.agents.catalogue import (
+    CATALOGUE,
+    CUSTOM_PREFIX,
+    DEFAULT_AGENT_CONFIG,
+    AgentSpec,
+    custom_spec,
+    get_spec,
+    is_custom,
+    merged_config,
+)
+from app.agents.diagnostics import TOOL_LOOP_AGENTS
+from app.core.errors import AppError, ConflictError, NotFoundError, ValidationFailedError
 from app.models import Agent, AgentExecution, ModelEndpoint
-from app.schemas.ai import AgentExecutionOut, AgentOut, AgentStats, AgentUpdate
+from app.schemas.ai import (
+    AgentCreate,
+    AgentExecutionOut,
+    AgentOut,
+    AgentSettings,
+    AgentStats,
+    AgentUpdate,
+)
 from app.schemas.common import PageParams
 from app.services import audit_service as audit
 from app.services.context import RequestContext
+from app.tools import catalogue as tool_catalogue
+
+# Settings that only mean something for agents running the tool loop.
+TOOL_SETTINGS = ("allowed_tools", "max_steps", "instructions")
 
 
 async def ensure_agents(session: AsyncSession, tenant_id: uuid.UUID) -> int:
@@ -61,7 +83,7 @@ async def _stats(session: AsyncSession) -> dict[str, AgentStats]:
         .where(AgentExecution.started_at >= since)
         .group_by(AgentExecution.agent_type)
     )
-    return {
+    out = {
         r[0]: AgentStats(
             executions_24h=r[1],
             failures_24h=r[2],
@@ -71,10 +93,38 @@ async def _stats(session: AsyncSession) -> dict[str, AgentStats]:
         )
         for r in rows
     }
+    totals = await session.execute(
+        select(
+            AgentExecution.agent_type,
+            func.count(),
+            func.count(case((AgentExecution.status == "success", 1))),
+            func.count(case((AgentExecution.status == "failed", 1))),
+            func.max(AgentExecution.started_at),
+            func.avg(AgentExecution.duration_ms),
+        ).group_by(AgentExecution.agent_type)
+    )
+    for agent_type, total, ok, failed, last, avg in totals:
+        stats = out.setdefault(agent_type, AgentStats())
+        stats.executions_total = total
+        stats.success_rate = round(ok / (ok + failed), 3) if ok + failed else None
+        stats.last_run_at = last
+        if stats.avg_duration_ms is None and avg is not None:
+            stats.avg_duration_ms = round(float(avg), 1)
+    return out
+
+
+def _spec(agent: Agent) -> AgentSpec | None:
+    if is_custom(agent.agent_type):
+        return custom_spec(agent.agent_type, agent.name, agent.description)
+    return get_spec(agent.agent_type)
+
+
+def uses_tools(agent_type: str) -> bool:
+    return agent_type in TOOL_LOOP_AGENTS or is_custom(agent_type)
 
 
 def _to_out(agent: Agent, model_names: dict[uuid.UUID, str], stats: AgentStats) -> AgentOut:
-    spec = get_spec(agent.agent_type)
+    spec = _spec(agent)
     return AgentOut(
         id=agent.id,
         agent_type=agent.agent_type,
@@ -88,6 +138,8 @@ def _to_out(agent: Agent, model_names: dict[uuid.UUID, str], stats: AgentStats) 
         available_in_phase=spec.available_in_phase if spec else 99,
         implemented=spec.implemented if spec else False,
         specialist=spec.specialist if spec else True,
+        custom=is_custom(agent.agent_type),
+        uses_tools=uses_tools(agent.agent_type),
         stats=stats,
         updated_at=agent.updated_at,
     )
@@ -103,7 +155,7 @@ _ORDER = {spec.agent_type: i for i, spec in enumerate(CATALOGUE)}
 async def list_agents(ctx: RequestContext) -> list[AgentOut]:
     s = ctx.session
     agents = list(await s.scalars(select(Agent)))
-    agents.sort(key=lambda a: _ORDER.get(a.agent_type, 99))
+    agents.sort(key=lambda a: (_ORDER.get(a.agent_type, 99), a.name.lower()))
     names, stats = await _model_names(s), await _stats(s)
     return [_to_out(a, names, stats.get(a.agent_type, AgentStats())) for a in agents]
 
@@ -121,6 +173,126 @@ async def get_agent(ctx: RequestContext, agent_id: uuid.UUID) -> AgentOut:
     return _to_out(agent, names, stats.get(agent.agent_type, AgentStats()))
 
 
+async def _check_settings(
+    session: AsyncSession, agent_type: str, settings: AgentSettings
+) -> dict[str, Any]:
+    """Validate settings against the agent and the tenant's tool catalogue.
+
+    Only read tools can be allowed: change tools never reach an agent, whatever the
+    configuration says (the catalogue also filters them out at run time).
+    """
+    values = settings.model_dump(exclude_none=True)
+    if not uses_tools(agent_type):
+        given = [k for k in TOOL_SETTINGS if k in values and values[k] not in ([], "")]
+        if given:
+            raise ValidationFailedError(
+                f"{', '.join(given)} only apply to agents that call tools "
+                "(diagnostics and custom agents)"
+            )
+    names = values.get("allowed_tools") or []
+    if names:
+        catalogue = await tool_catalogue.load(session)
+        unknown = [n for n in names if catalogue.get(n) is None]
+        if unknown:
+            raise ValidationFailedError(
+                f"Unknown or disabled tool(s): {', '.join(unknown)}",
+                details={"tools": unknown},
+            )
+        change = [n for n in names if catalogue.tools[n].is_change]
+        if change:
+            raise ValidationFailedError(
+                f"Remediation (change) tools cannot be given to agents: {', '.join(change)}; "
+                "they run only through the approval workflow",
+                details={"tools": change},
+            )
+    return values
+
+
+async def _check_model(session: AsyncSession, model_id: uuid.UUID) -> None:
+    endpoint = await session.get(ModelEndpoint, model_id)
+    if endpoint is None:
+        raise AppError("Model not found", code="invalid_model", status_code=422)
+    if endpoint.purpose != "chat":
+        raise AppError(
+            "Agents need a chat model, not an embedding model",
+            code="invalid_model",
+            status_code=422,
+        )
+
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    slug = slug.removesuffix("_agent").removeprefix("custom_")
+    if not slug or not slug[0].isalpha():
+        slug = f"agent_{slug}".rstrip("_")
+    return slug[:40].rstrip("_")
+
+
+async def create_agent(ctx: RequestContext, data: AgentCreate) -> AgentOut:
+    """Create a custom tool-loop specialist (agent_type ``custom_<slug>``)."""
+    s, p = ctx.session, ctx.principal
+    slug = data.slug or _slugify(data.name)
+    if slug.endswith("_agent"):
+        raise ValidationFailedError("The slug must not end with '_agent'")
+    agent_type = f"{CUSTOM_PREFIX}{slug}"
+    if await s.scalar(select(Agent.id).where(Agent.agent_type == agent_type)):
+        raise ConflictError(f"An agent named {agent_type} already exists")
+    settings = await _check_settings(s, agent_type, data)
+    if data.model_id is not None:
+        await _check_model(s, data.model_id)
+    config = {
+        **DEFAULT_AGENT_CONFIG,
+        **{k: v for k, v in settings.items() if k in DEFAULT_AGENT_CONFIG},
+    }
+    agent = Agent(
+        tenant_id=p.tenant_id,
+        agent_type=agent_type,
+        name=data.name.strip(),
+        description=data.description.strip(),
+        model_id=data.model_id,
+        configuration=config,
+        enabled=data.enabled,
+    )
+    s.add(agent)
+    await s.flush()
+    await audit.record(
+        s,
+        tenant_id=p.tenant_id,
+        actor=p,
+        action="agent.create",
+        entity_type="agent",
+        entity_id=agent.id,
+        details={
+            "agent_type": agent_type,
+            "name": agent.name,
+            "allowed_tools": config["allowed_tools"],
+            "model_id": str(data.model_id) if data.model_id else None,
+        },
+        client=ctx.client,
+    )
+    return await get_agent(ctx, agent.id)
+
+
+async def delete_agent(ctx: RequestContext, agent_id: uuid.UUID) -> None:
+    s, p = ctx.session, ctx.principal
+    agent = await _get(s, agent_id)
+    if not is_custom(agent.agent_type):
+        raise ConflictError("Built-in agents cannot be deleted; disable them instead")
+    details = {"agent_type": agent.agent_type, "name": agent.name}
+    await s.delete(agent)
+    await s.flush()
+    await audit.record(
+        s,
+        tenant_id=p.tenant_id,
+        actor=p,
+        action="agent.delete",
+        entity_type="agent",
+        entity_id=agent_id,
+        details=details,
+        client=ctx.client,
+    )
+
+
 async def update_agent(ctx: RequestContext, agent_id: uuid.UUID, data: AgentUpdate) -> AgentOut:
     s, p = ctx.session, ctx.principal
     agent = await _get(s, agent_id)
@@ -130,15 +302,18 @@ async def update_agent(ctx: RequestContext, agent_id: uuid.UUID, data: AgentUpda
     if data.description is not None and data.description != agent.description:
         agent.description = changes["description"] = data.description
     if "model_id" in data.model_fields_set and data.model_id != agent.model_id:
-        if data.model_id is not None and await s.get(ModelEndpoint, data.model_id) is None:
-            raise AppError("Model not found", code="invalid_model", status_code=422)
+        if data.model_id is not None:
+            await _check_model(s, data.model_id)
         agent.model_id = data.model_id
         changes["model_id"] = str(data.model_id) if data.model_id else None
     if data.configuration is not None:
-        new = {**agent.configuration, **data.configuration.model_dump(exclude_none=True)}
+        values = await _check_settings(s, agent.agent_type, data.configuration)
+        if is_custom(agent.agent_type) and values.get("allowed_tools") == []:
+            raise ValidationFailedError("A custom agent needs at least one allowed tool")
+        new = {**agent.configuration, **values}
         if new != agent.configuration:
             agent.configuration = new
-            changes["configuration"] = data.configuration.model_dump(exclude_none=True)
+            changes["configuration"] = values
     if data.enabled is not None and data.enabled != agent.enabled:
         if not data.enabled and agent.agent_type == "supervisor":
             # Allowed, but investigations will refuse to start; make that explicit.
@@ -165,10 +340,16 @@ async def list_executions(
     *,
     agent_type: str | None = None,
     investigation_id: uuid.UUID | None = None,
+    status: str | None = None,
+    errors_only: bool = False,
 ) -> tuple[list[AgentExecutionOut], int]:
     q = select(AgentExecution)
     if agent_type:
         q = q.where(AgentExecution.agent_type == agent_type)
+    if status:
+        q = q.where(AgentExecution.status == status)
+    if errors_only:
+        q = q.where(AgentExecution.error.is_not(None))
     if investigation_id:
         q = q.where(AgentExecution.investigation_id == investigation_id)
     total = await ctx.session.scalar(select(func.count()).select_from(q.subquery())) or 0

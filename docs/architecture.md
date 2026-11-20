@@ -1,4 +1,4 @@
-# Architecture (Phase 5)
+# Architecture (Phase 6)
 
 LocalOps is a **modular monolith** (spec §25.1): one FastAPI backend image runs as `api`,
 `worker` and the one-shot `migrate`. A static React bundle is served behind an nginx reverse proxy.
@@ -155,14 +155,45 @@ system fonts only and runs fully offline.
     policy and the decision buttons);
   - Settings (Account, Users, Roles, AI Models, Remediation Policies, Tenants).
 
-  The heavier pages are loaded on demand. Screens arriving in later phases have "planned"
-  placeholders.
+  The heavier pages are loaded on demand. Phase 6 adds the Knowledge Base, Settings → Tools,
+  a Tools tab on MCP and HTTP API integrations, and agent configuration with custom agents.
 
-## Planned next (Phase 6)
+## Knowledge and extensibility (Phase 6)
 
-- Runbooks and the knowledge base, with vector search (Qdrant);
-- MCP tool servers;
-- notifications (email and chat) for approvals and incidents.
+See [knowledge.md](knowledge.md). Revision `0006` adds:
 
-Further integrations (SNMP, Kubernetes, VMware, Proxmox, monitoring systems), runbooks and
-vector search follow in later phases.
+| Table | Purpose |
+|---|---|
+| `knowledge_documents` | Documents: type, source, status, tags, linked resources, version, index status |
+| `knowledge_document_versions` | One row per saved version |
+| `knowledge_chunks` | Chunks with a heading path and a full-text vector |
+| `knowledge_feedback` | One vote per user and document |
+| `tool_definitions` | MCP and HTTP tools per tenant: kind, risk, permission, enabled, status, schema hash and approved hash |
+
+It also adds a `purpose` column (`chat` / `embedding`) to `model_endpoints`, the integration
+types `mcp` and `http_api`, and the `tool.manage` permission.
+
+Code:
+
+- `app/knowledge/`: chunking, extraction, indexer, Qdrant access (`vectorstore.py`),
+  hybrid search and prompt-injection delimiters (`safety.py`);
+- `app/integrations/mcp.py`: our own MCP client (JSON-RPC over Streamable HTTP or SSE);
+- `app/integrations/http_api.py`: template rendering with the URL confinement;
+- `app/tools/catalogue.py`: the per-tenant catalogue, built-in plus usable registered tools,
+  cached for 30 s;
+- `app/tools/dynamic.py`: turns a definition into a `ToolSpec` validated with JSON Schema.
+
+Qdrant holds one collection per embedding model. Every point carries `tenant_id`, and hits
+are re-read under RLS.
+
+Background jobs in the worker:
+
+- `index_knowledge_document` (per change);
+- `knowledge_sync` (every 5 minutes: generated documents and retries);
+- `mcp_tool_sync` (hourly).
+
+## Planned next (Phase 7)
+
+- offline packaging, backup and restore;
+- notifications (email and chat) for approvals and incidents;
+- further integrations (SNMP, Kubernetes, VMware, Proxmox, monitoring systems).

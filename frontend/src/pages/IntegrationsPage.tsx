@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Box,
+  Cable,
   ChevronDown,
   ChevronRight,
   Globe,
@@ -13,6 +14,7 @@ import {
   Radar,
   Server,
   Trash2,
+  Webhook,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -23,12 +25,13 @@ import { integrationsApi, type IntegrationInput } from "@/api/endpoints";
 import { formatDuration } from "@/components/investigation/shared";
 import { INTEGRATION_META } from "@/components/inventory/shared";
 import { formatTargets, parseTargets } from "@/components/inventory/targets";
+import { IntegrationTools } from "@/components/tools/IntegrationTools";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Alert, Badge, EmptyState, ErrorState, Spinner, StatusDot, Table, Td, Th } from "@/components/ui/display";
 import { Field, Input, Select, Textarea } from "@/components/ui/form";
 import { useAuthStore } from "@/stores/authStore";
-import type { DiscoveryRun, Integration, IntegrationTestResult, IntegrationType } from "@/types/api";
+import { TOOL_INTEGRATION_TYPES, type DiscoveryRun, type Integration, type IntegrationTestResult, type IntegrationType } from "@/types/api";
 import { formatDateTime, formatRelative } from "@/utils/format";
 
 const TYPE_ICONS: Record<IntegrationType, LucideIcon> = {
@@ -36,7 +39,11 @@ const TYPE_ICONS: Record<IntegrationType, LucideIcon> = {
   windows_winrm: Monitor,
   docker: Box,
   http: Globe,
+  mcp: Cable,
+  http_api: Webhook,
 };
+
+const isToolType = (type: IntegrationType) => TOOL_INTEGRATION_TYPES.includes(type);
 
 const RUN_TONE = {
   completed: "success",
@@ -98,12 +105,19 @@ function IntegrationDialog({
     clear_credentials: false,
     schedule: integration?.schedule_minutes ? String(integration.schedule_minutes) : "",
     enabled: integration?.enabled ?? true,
+    url: cfg.url ?? "",
+    mcp_transport: cfg.mcp_transport ?? "auto",
+    auth_type: cfg.auth_type ?? "none",
+    auth_header: cfg.auth_header ?? "",
+    environment: cfg.environment ?? "",
+    token: "",
   }));
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const check = (k: keyof typeof form) => (e: { target: { checked: boolean } }) =>
     setForm((f) => ({ ...f, [k]: e.target.checked }));
-  const parsed = parseTargets(form.targets, type);
+  const tool = isToolType(type);
+  const parsed = tool ? { targets: [], errors: [] as string[] } : parseTargets(form.targets, type);
   const ssh = usesSsh(type, form.mode);
   const tls = type === "docker" && form.mode === "tls";
   const stored = integration?.credential_fields ?? [];
@@ -118,6 +132,10 @@ function IntegrationDialog({
           put("private_key", form.private_key);
           put("passphrase", form.passphrase);
         }
+      } else if (tool) {
+        if (form.auth_type === "basic") put("password", form.password);
+        else if (form.auth_type === "bearer" || form.auth_type === "header") put("token", form.token);
+        put("ca", form.ca);
       } else if (type === "windows_winrm") put("password", form.password);
       else if (tls) {
         put("ca", form.ca);
@@ -130,7 +148,18 @@ function IntegrationDialog({
         description: form.description,
         targets: parsed.targets,
         enabled: form.enabled,
-        configuration: {
+        configuration: tool
+          ? {
+              url: form.url.trim(),
+              mcp_transport: form.mcp_transport as "auto" | "streamable_http" | "sse",
+              auth_type: form.auth_type as "none" | "bearer" | "basic" | "header",
+              auth_header: form.auth_type === "header" ? form.auth_header.trim() || null : null,
+              username: form.auth_type === "basic" ? form.username.trim() || null : null,
+              environment: form.environment.trim() || null,
+              timeout_seconds: Number(form.timeout) || 30,
+              verify_tls: form.verify_tls,
+            }
+          : {
           username: form.username.trim() || null,
           port: form.port ? Number(form.port) : null,
           timeout_seconds: Number(form.timeout) || 20,
@@ -149,7 +178,9 @@ function IntegrationDialog({
       };
       if (Object.keys(credentials).length) body.credentials = credentials;
       if (integration && form.clear_credentials) body.clear_credentials = true;
-      if (form.schedule) body.schedule_minutes = Number(form.schedule);
+      if (tool) {
+        if (integration?.schedule_minutes) body.clear_schedule = true;
+      } else if (form.schedule) body.schedule_minutes = Number(form.schedule);
       else if (integration?.schedule_minutes) body.clear_schedule = true;
       return integration ? integrationsApi.update(integration.id, body) : integrationsApi.create(body);
     },
@@ -202,6 +233,70 @@ function IntegrationDialog({
           </Field>
         )}
 
+        {tool && (
+          <>
+            <Field
+              label={type === "mcp" ? "Server URL" : "Base URL"}
+              htmlFor="i-url"
+              hint={type === "mcp" ? "The MCP endpoint, e.g. http://netbox-mcp.corp.local:8080/mcp. Network transports only; LocalOps never starts local processes." : "Every tool request stays under this URL (same host, scheme and path prefix)."}
+            >
+              <Input id="i-url" className="font-mono" value={form.url} onChange={set("url")} required maxLength={500} placeholder={type === "mcp" ? "http://mcp.corp.local:8080/mcp" : "https://inventory.corp.local/api"} />
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              {type === "mcp" && (
+                <Field label="Transport" htmlFor="i-mcpt" hint="Auto tries Streamable HTTP, then legacy SSE.">
+                  <Select id="i-mcpt" value={form.mcp_transport} onChange={set("mcp_transport")}>
+                    <option value="auto">Auto</option>
+                    <option value="streamable_http">Streamable HTTP</option>
+                    <option value="sse">SSE (legacy)</option>
+                  </Select>
+                </Field>
+              )}
+              <Field label="Authentication" htmlFor="i-tauth">
+                <Select id="i-tauth" value={form.auth_type} onChange={set("auth_type")}>
+                  <option value="none">None</option>
+                  <option value="bearer">Bearer token</option>
+                  <option value="basic">Basic (username / password)</option>
+                  <option value="header">Custom header</option>
+                </Select>
+              </Field>
+            </div>
+            {form.auth_type === "header" && (
+              <Field label="Header name" htmlFor="i-hname">
+                <Input id="i-hname" value={form.auth_header} onChange={set("auth_header")} placeholder="X-Api-Key" maxLength={64} />
+              </Field>
+            )}
+            {form.auth_type === "basic" && (
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Username" htmlFor="i-tuser">
+                  <Input id="i-tuser" value={form.username} onChange={set("username")} autoComplete="off" />
+                </Field>
+                <Field label="Password" htmlFor="i-tpass" hint={keep("password")}>
+                  <Input id="i-tpass" type="password" value={form.password} onChange={set("password")} autoComplete="new-password" />
+                </Field>
+              </div>
+            )}
+            {(form.auth_type === "bearer" || form.auth_type === "header") && (
+              <Field label={form.auth_type === "bearer" ? "Token" : "Header value"} htmlFor="i-token" hint={keep("token")}>
+                <Input id="i-token" type="password" value={form.token} onChange={set("token")} autoComplete="new-password" />
+              </Field>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Environment" htmlFor="i-env" hint='What the tools act on. "production" (or none) means change tools always need approval.'>
+                <Input id="i-env" value={form.environment} onChange={set("environment")} maxLength={50} placeholder="production" />
+              </Field>
+              <Field label="Timeout (s)" htmlFor="i-ttimeout">
+                <Input id="i-ttimeout" type="number" min={3} max={300} value={form.timeout} onChange={set("timeout")} />
+              </Field>
+            </div>
+            <Field label="CA certificate (optional)" htmlFor="i-tca" hint={keep("ca") ?? "For servers using an internal certificate authority."}>
+              <Textarea id="i-tca" value={form.ca} onChange={set("ca")} rows={3} className="font-mono text-xs" placeholder="-----BEGIN CERTIFICATE-----" />
+            </Field>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.verify_tls} onChange={check("verify_tls")} className="size-4" /> Verify TLS certificates</label>
+          </>
+        )}
+
+        {!tool && (
         <Field
           label="Targets"
           htmlFor="i-targets"
@@ -216,6 +311,7 @@ function IntegrationDialog({
             placeholder={type === "http" ? "https://intranet.corp.local/health Intranet" : "10.0.0.11 app-01\ndb-01.corp.local:2222"}
           />
         </Field>
+        )}
         {!!parsed.errors.length && <Alert tone="warning">{parsed.errors.join(" · ")}</Alert>}
 
         {(ssh || type === "windows_winrm") && (
@@ -310,6 +406,7 @@ function IntegrationDialog({
           </div>
         )}
 
+        {!tool && (
         <div className="grid grid-cols-2 gap-4">
           <Field label="Discovery schedule" htmlFor="i-sched">
             <Select id="i-sched" value={form.schedule} onChange={set("schedule")}>
@@ -320,6 +417,7 @@ function IntegrationDialog({
             <Input id="i-timeout" type="number" min={3} max={300} value={form.timeout} onChange={set("timeout")} />
           </Field>
         </div>
+        )}
         <Field label="Description" htmlFor="i-desc">
           <Input id="i-desc" value={form.description} onChange={set("description")} maxLength={1000} />
         </Field>
@@ -449,9 +547,10 @@ function HostKeys({ integration, canManage }: { integration: Integration; canMan
 
 // ------------------------------------------------------------------ card
 
-function IntegrationCard({ integration, canManage, onEdit }: { integration: Integration; canManage: boolean; onEdit: () => void }) {
+function IntegrationCard({ integration, canManage, canManageTools, onEdit }: { integration: Integration; canManage: boolean; canManageTools: boolean; onEdit: () => void }) {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"runs" | "keys" | null>(null);
+  const tool = isToolType(integration.integration_type);
+  const [tab, setTab] = useState<"runs" | "keys" | "tools" | null>(tool ? "tools" : null);
   const [result, setResult] = useState<IntegrationTestResult | null>(null);
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["integrations"] });
@@ -479,18 +578,20 @@ function IntegrationCard({ integration, canManage, onEdit }: { integration: Inte
             {integration.last_status && <Badge tone={RUN_TONE[integration.last_status]}>last run {integration.last_status}</Badge>}
           </div>
           <p className="mt-0.5 truncate text-xs text-muted">
-            {integration.description || integration.targets.map((t) => t.name || t.host).slice(0, 6).join(", ") || "No targets yet"}
+            {integration.description || (tool ? integration.configuration.url : integration.targets.map((t) => t.name || t.host).slice(0, 6).join(", ")) || "No targets yet"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {canManage && (
             <>
-              <Button variant="secondary" size="sm" onClick={() => { setResult(null); test.mutate(); }} loading={test.isPending} disabled={!integration.targets.length}>
+              <Button variant="secondary" size="sm" onClick={() => { setResult(null); test.mutate(); }} loading={test.isPending} disabled={!tool && !integration.targets.length}>
                 <Zap /> Test
               </Button>
-              <Button size="sm" onClick={() => discover.mutate()} loading={discover.isPending} disabled={!integration.enabled || !integration.targets.length}>
-                <Play /> Discover now
-              </Button>
+              {!tool && (
+                <Button size="sm" onClick={() => discover.mutate()} loading={discover.isPending} disabled={!integration.enabled || !integration.targets.length}>
+                  <Play /> Discover now
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={() => toggle.mutate()}>{integration.enabled ? "Disable" : "Enable"}</Button>
               <Button variant="ghost" size="icon" aria-label="Edit" onClick={onEdit}><Pencil /></Button>
               <Button variant="ghost" size="icon" aria-label="Delete" onClick={() => window.confirm(`Delete integration "${integration.name}"? Discovered resources stay in the inventory.`) && remove.mutate()}>
@@ -501,6 +602,14 @@ function IntegrationCard({ integration, canManage, onEdit }: { integration: Inte
         </div>
       </div>
 
+      {tool ? (
+        <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 text-sm md:grid-cols-4">
+          <div><dt className="text-xs text-muted">URL</dt><dd className="mt-0.5 truncate font-mono text-xs">{integration.configuration.url}</dd></div>
+          <div><dt className="text-xs text-muted">Environment</dt><dd className="mt-0.5">{integration.configuration.environment || "not set"}</dd></div>
+          <div><dt className="text-xs text-muted">Authentication</dt><dd className="mt-0.5 text-xs">{integration.configuration.auth_type ?? "none"}{integration.has_credentials ? " · stored" : ""}</dd></div>
+          <div><dt className="text-xs text-muted">Last sync</dt><dd className="mt-0.5">{formatRelative(integration.last_run_at)}</dd></div>
+        </dl>
+      ) : (
       <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 text-sm md:grid-cols-5">
         <div><dt className="text-xs text-muted">Targets</dt><dd className="mt-0.5">{integration.targets.length}</dd></div>
         <div>
@@ -514,6 +623,7 @@ function IntegrationCard({ integration, canManage, onEdit }: { integration: Inte
           <dd className="mt-0.5 text-xs">{integration.has_credentials ? integration.credential_fields.join(", ").replace(/_/g, " ") : "none"}{integration.configuration.username ? ` · ${integration.configuration.username}` : ""}</dd>
         </div>
       </dl>
+      )}
 
       {integration.last_error && integration.last_status !== "completed" && !result && (
         <div className="mt-3"><Alert tone="warning">{integration.last_error}</Alert></div>
@@ -523,6 +633,9 @@ function IntegrationCard({ integration, canManage, onEdit }: { integration: Inte
         <div className="mt-3">
           <Alert tone={result.ok ? "success" : "danger"}>
             <span className="font-mono">{result.target}</span>: {result.message}
+            {Array.isArray(result.details.tools) && !!result.details.tools.length && (
+              <span className="mt-1 block text-xs">Tools: {(result.details.tools as string[]).join(", ")}</span>
+            )}
             {typeof result.details.host_key_fingerprint === "string" && (
               <span className="mt-1 block text-xs">
                 Host key {result.details.host_key_pinned_now ? "pinned now" : "matches pin"}: <span className="font-mono">{result.details.host_key_fingerprint}</span>
@@ -534,19 +647,20 @@ function IntegrationCard({ integration, canManage, onEdit }: { integration: Inte
       )}
 
       <div className="mt-4 flex gap-1 border-b border-border text-xs">
-        {(["runs", ...(ssh ? (["keys"] as const) : [])] as const).map((t) => (
+        {(tool ? (["tools"] as const) : (["runs", ...(ssh ? (["keys"] as const) : [])] as const)).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(tab === t ? null : t)}
             className={`-mb-px border-b-2 px-3 py-2 ${tab === t ? "border-primary text-fg" : "border-transparent text-muted hover:text-fg"}`}
           >
-            {t === "runs" ? "Discovery runs" : "Pinned host keys"}
+            {t === "runs" ? "Discovery runs" : t === "tools" ? "Tools" : "Pinned host keys"}
           </button>
         ))}
       </div>
       {tab === "runs" && <div className="pt-2"><RunsTable integrationId={integration.id} /></div>}
       {tab === "keys" && <div className="pt-3"><HostKeys integration={integration} canManage={canManage} /></div>}
+      {tab === "tools" && <IntegrationTools integration={integration} canManage={canManageTools} />}
     </section>
   );
 }
@@ -555,6 +669,7 @@ function IntegrationCard({ integration, canManage, onEdit }: { integration: Inte
 
 export function IntegrationsPage() {
   const canManage = useAuthStore((s) => s.hasPermission("integration.configure"));
+  const canManageTools = useAuthStore((s) => s.hasPermission("tool.manage"));
   const query = useQuery({ queryKey: ["integrations"], queryFn: integrationsApi.list });
   const [dialog, setDialog] = useState<{ integration: Integration | null; type: IntegrationType } | null>(null);
   if (query.isLoading) return <Spinner />;
@@ -566,13 +681,19 @@ export function IntegrationsPage() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Tools &amp; Integrations</h1>
-          <p className="text-sm text-muted">Read-only connections LocalOps uses to discover infrastructure. Only fixed, read-only commands run on targets.</p>
+          <p className="text-sm text-muted">Read-only connections LocalOps uses to discover infrastructure, and tool servers that extend what agents can check.</p>
         </div>
         {canManage && <Button onClick={() => setDialog({ integration: null, type: "linux_ssh" })}><Plus /> Add integration</Button>}
       </div>
 
+      {([
+        ["Discovery", (Object.keys(INTEGRATION_META) as IntegrationType[]).filter((t) => !isToolType(t))],
+        ["Tools", TOOL_INTEGRATION_TYPES],
+      ] as const).map(([group, types]) => (
+      <div key={group} className="space-y-2">
+      <h2 className="text-xs font-medium tracking-wide text-subtle uppercase">{group}</h2>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {(Object.keys(INTEGRATION_META) as IntegrationType[]).map((type) => {
+        {types.map((type) => {
           const Icon = TYPE_ICONS[type];
           const mine = integrations.filter((i) => i.integration_type === type);
           return (
@@ -587,14 +708,16 @@ export function IntegrationsPage() {
               <span className="min-w-0">
                 <span className="block text-sm font-medium">{INTEGRATION_META[type].label}</span>
                 <span className="mt-0.5 block text-xs text-muted">{INTEGRATION_META[type].description}</span>
-                <span className="mt-2 block text-xs text-subtle">{mine.length ? `${mine.length} configured · ${mine.reduce((n, i) => n + i.resource_count, 0)} resources` : "Not configured"}</span>
+                <span className="mt-2 block text-xs text-subtle">{mine.length ? (isToolType(type) ? `${mine.length} configured` : `${mine.length} configured · ${mine.reduce((n, i) => n + i.resource_count, 0)} resources`) : "Not configured"}</span>
               </span>
             </button>
           );
         })}
       </div>
+      </div>
+      ))}
       <p className="flex items-center gap-2 text-xs text-subtle">
-        <Radar className="size-3.5" /> Network devices (SNMP), monitoring systems and MCP tool servers arrive in later phases.
+        <Radar className="size-3.5" /> Network devices (SNMP) and monitoring systems arrive in a later phase.
       </p>
 
       {!integrations.length ? (
@@ -603,7 +726,7 @@ export function IntegrationsPage() {
         </div>
       ) : (
         integrations.map((i) => (
-          <IntegrationCard key={i.id} integration={i} canManage={canManage} onEdit={() => setDialog({ integration: i, type: i.integration_type })} />
+          <IntegrationCard key={i.id} integration={i} canManage={canManage} canManageTools={canManageTools} onEdit={() => setDialog({ integration: i, type: i.integration_type })} />
         ))
       )}
       {dialog && (

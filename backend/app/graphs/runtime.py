@@ -20,7 +20,14 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.catalogue import AgentSpec, get_spec, merged_config
+from app.agents.catalogue import (
+    CATALOGUE,
+    AgentSpec,
+    custom_spec,
+    get_spec,
+    is_custom,
+    merged_config,
+)
 from app.core.config import Settings
 from app.core.crypto import decrypt_secret
 from app.database.session import tenant_session
@@ -130,21 +137,27 @@ class InvestigationRuntime:
 
     async def bind_agent(self, agent_type: str) -> AgentBinding:
         spec = get_spec(agent_type)
-        if spec is None:
+        if spec is None and not is_custom(agent_type):
             raise AgentUnavailableError(f"Unknown agent '{agent_type}'")
         async with tenant_session(self.tenant_id) as session:
             agent = await session.scalar(select(Agent).where(Agent.agent_type == agent_type))
+            if spec is None:
+                if agent is None:
+                    raise AgentUnavailableError(f"Unknown agent '{agent_type}'")
+                spec = custom_spec(agent.agent_type, agent.name, agent.description)
             enabled = agent.enabled if agent else True
             config = merged_config(agent.configuration if agent else None)
             endpoint: ModelEndpoint | None = None
             if agent and agent.model_id:
                 endpoint = await session.get(ModelEndpoint, agent.model_id)
-                if endpoint is not None and not endpoint.enabled:
+                if endpoint is not None and (not endpoint.enabled or endpoint.purpose != "chat"):
                     endpoint = None
             if endpoint is None:
                 endpoint = await session.scalar(
                     select(ModelEndpoint).where(
-                        ModelEndpoint.is_default.is_(True), ModelEndpoint.enabled.is_(True)
+                        ModelEndpoint.is_default.is_(True),
+                        ModelEndpoint.enabled.is_(True),
+                        ModelEndpoint.purpose == "chat",
                     )
                 )
             ep_config: EndpointConfig | None = None
@@ -287,6 +300,42 @@ class InvestigationRuntime:
             actor=f"agent:{agent_type}",
             evidence_id=evidence_id,
         )
+
+    async def plannable_agents(self) -> list[Any]:
+        """Agents the supervisor may plan now: enabled built-in specialists plus enabled
+        custom agents, each with the tools it would actually get."""
+        from app.agents import supervisor
+        from app.agents.diagnostics import TOOL_LOOP_AGENTS
+
+        catalogue = await self.tool_catalogue()
+        async with tenant_session(self.tenant_id) as session:
+            rows = {a.agent_type: a for a in await session.scalars(select(Agent))}
+        out: list[supervisor.PlanAgent] = []
+        for spec in CATALOGUE:
+            if spec.agent_type not in supervisor.PLANNABLE or not spec.implemented:
+                continue
+            row = rows.get(spec.agent_type)
+            if row is not None and not row.enabled:
+                continue
+            tools: list[str] | None = None
+            if spec.agent_type in TOOL_LOOP_AGENTS:
+                allowed = merged_config(row.configuration if row else None)["allowed_tools"]
+                tools = [t.name for t in catalogue.for_agent(spec.agent_type, allowed or None)]
+            out.append(supervisor.builtin_plan_agent(spec, tools))
+        for row in sorted(rows.values(), key=lambda a: a.name):
+            if is_custom(row.agent_type) and row.enabled:
+                allowed = merged_config(row.configuration)["allowed_tools"]
+                tools = [t.name for t in catalogue.for_agent(row.agent_type, allowed or None)]
+                out.append(
+                    supervisor.PlanAgent(row.agent_type, row.description, tuple(tools), custom=True)
+                )
+        return out
+
+    async def tool_catalogue(self) -> Any:
+        """Built-in tools plus this tenant's enabled MCP / HTTP tools."""
+        from app.tools import catalogue
+
+        return await catalogue.for_tenant(self.tenant_id)
 
     async def in_session[T](self, fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
         """Run ``fn`` in a short tenant-bound transaction."""

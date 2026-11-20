@@ -121,10 +121,13 @@ export interface ModelSettings {
   tool_calling?: "auto" | "native" | "json";
 }
 
+export type ModelPurpose = "chat" | "embedding";
+
 export interface ModelEndpoint {
   id: string;
   name: string;
   provider: Provider;
+  purpose: ModelPurpose;
   base_url: string;
   model_name: string;
   description: string;
@@ -143,6 +146,7 @@ export interface ModelEndpoint {
 export interface ModelTestResult {
   ok: boolean;
   latency_ms: number | null;
+  dimensions?: number | null;
   models: string[];
   model_available: boolean | null;
   reply: string | null;
@@ -155,6 +159,8 @@ export interface AgentConfig {
   timeout_seconds: number;
   max_retries: number;
   allowed_tools: string[];
+  max_steps: number;
+  instructions: string;
 }
 
 export interface AgentStats {
@@ -163,6 +169,8 @@ export interface AgentStats {
   avg_duration_ms: number | null;
   tokens_24h: number;
   last_run_at: string | null;
+  executions_total: number;
+  success_rate: number | null;
 }
 
 export interface Agent {
@@ -178,6 +186,8 @@ export interface Agent {
   available_in_phase: number;
   implemented: boolean;
   specialist: boolean;
+  custom: boolean;
+  uses_tools: boolean;
   stats: AgentStats;
   updated_at: string | null;
 }
@@ -302,6 +312,7 @@ export interface SimilarItem {
   conclusion?: string | null;
   created_at: string;
   score: number;
+  match?: KnowledgeMatch | null;
 }
 
 export interface InvestigationReport {
@@ -367,7 +378,8 @@ export interface InvestigationEvent {
 
 // ------------------------------------------------------------------ Inventory (Phase 3)
 
-export type IntegrationType = "linux_ssh" | "windows_winrm" | "docker" | "http";
+export type IntegrationType = "linux_ssh" | "windows_winrm" | "docker" | "http" | "mcp" | "http_api";
+export const TOOL_INTEGRATION_TYPES: IntegrationType[] = ["mcp", "http_api"];
 export type HealthStatus = "healthy" | "degraded" | "unhealthy" | "unknown";
 export type ResourceType =
   | "linux_server"
@@ -407,6 +419,12 @@ export interface IntegrationSettings {
   verify_tls?: boolean;
   expected_status?: number[];
   slow_ms?: number;
+  // mcp / http_api
+  url?: string | null;
+  mcp_transport?: "auto" | "streamable_http" | "sse";
+  auth_type?: "none" | "bearer" | "basic" | "header";
+  auth_header?: string | null;
+  environment?: string | null;
 }
 
 export interface IntegrationCredentials {
@@ -416,6 +434,7 @@ export interface IntegrationCredentials {
   ca?: string;
   cert?: string;
   key?: string;
+  token?: string;
 }
 
 export interface Integration {
@@ -729,6 +748,7 @@ export interface ToolInfo {
   description: string;
   category: string;
   kind: "read" | "change";
+  source: ToolSource;
   permission: string;
   verify_with: string[];
   risk_level: string;
@@ -954,4 +974,244 @@ export interface PolicyInput {
   priority: number;
   rules: PolicyRules;
   enabled: boolean;
+}
+
+// ------------------------------------------------------------------ Knowledge (Phase 6)
+
+export type KnowledgeDocumentType =
+  | "runbook"
+  | "troubleshooting"
+  | "documentation"
+  | "procedure"
+  | "incident"
+  | "investigation"
+  | "other";
+export type EditableDocumentType = Exclude<KnowledgeDocumentType, "incident" | "investigation">;
+export type DocumentStatus = "active" | "draft" | "deprecated";
+export type IndexStatus = "pending" | "indexed" | "keyword_only" | "failed";
+export type KnowledgeMatch = "keyword" | "semantic" | "both";
+
+export interface KnowledgeDocument {
+  id: string;
+  title: string;
+  document_type: KnowledgeDocumentType;
+  source: "upload" | "manual" | "incident" | "investigation";
+  source_id: string | null;
+  category: string | null;
+  tags: string[];
+  resource_ids: string[];
+  status: DocumentStatus;
+  version: number;
+  validated_by: string | null;
+  validated_at: string | null;
+  index_status: IndexStatus;
+  index_error: string | null;
+  embedding_model: string | null;
+  indexed_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string | null;
+  size: number;
+  filename: string | null;
+  chunk_count: number;
+  helpful: number;
+  not_helpful: number;
+}
+
+export interface KnowledgeChunk {
+  id: string;
+  chunk_index: number;
+  heading: string;
+  content: string;
+  embedded: boolean;
+}
+
+export interface KnowledgeDocumentDetail extends KnowledgeDocument {
+  content: string;
+  metadata: Record<string, unknown>;
+  chunks: KnowledgeChunk[];
+  resource_names: Record<string, string>;
+}
+
+export interface KnowledgeVersion {
+  version: number;
+  title: string;
+  created_by: string | null;
+  created_at: string;
+  note: string | null;
+  size: number;
+}
+
+export interface KnowledgeVersionDetail extends KnowledgeVersion {
+  content: string;
+}
+
+export interface KnowledgeHit {
+  chunk_id: string;
+  document_id: string;
+  title: string;
+  document_type: KnowledgeDocumentType;
+  heading: string;
+  excerpt: string;
+  score: number;
+  match: KnowledgeMatch;
+  version: number;
+  validated: boolean;
+  status: DocumentStatus;
+  tags: string[];
+  resource_ids: string[];
+  source: KnowledgeDocument["source"];
+  source_id: string | null;
+}
+
+export interface KnowledgeSearchResponse {
+  mode: "hybrid" | "keyword";
+  note: string | null;
+  hits: KnowledgeHit[];
+}
+
+export interface KnowledgeStats {
+  documents: number;
+  chunks: number;
+  by_type: Record<string, number>;
+  by_status: Record<string, number>;
+  by_index_status: Record<string, number>;
+  validated: number;
+  embedding_model: string | null;
+  vector_store: "ok" | "unavailable" | "not_configured";
+}
+
+export interface KnowledgeDocumentInput {
+  title: string;
+  document_type: EditableDocumentType;
+  content: string;
+  category?: string | null;
+  tags?: string[];
+  resource_ids?: string[];
+  status?: "active" | "draft";
+}
+
+// ------------------------------------------------------------------ Registered tools (Phase 6)
+
+export type ToolSource = "builtin" | "mcp" | "http";
+export type ToolDefinitionStatus = "new" | "active" | "schema_changed" | "missing";
+export type ToolPermission = "tool.execute.readonly" | "tool.execute.remediation";
+
+export interface JsonSchemaObject {
+  type?: string;
+  properties?: Record<
+    string,
+    {
+      type?: string;
+      description?: string;
+      enum?: (string | number)[];
+      default?: unknown;
+      minimum?: number;
+      maximum?: number;
+      maxLength?: number;
+      pattern?: string;
+    }
+  >;
+  required?: string[];
+  [key: string]: unknown;
+}
+
+export interface HttpTemplate {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  body: unknown;
+  response_max_bytes: number;
+}
+
+export interface ToolDefinition {
+  id: string;
+  integration_id: string;
+  integration_name: string | null;
+  source: "mcp" | "http";
+  name: string;
+  remote_name: string | null;
+  title: string | null;
+  description: string;
+  remote_description: string | null;
+  input_schema: JsonSchemaObject;
+  output_schema: JsonSchemaObject | null;
+  http_template: HttpTemplate | null;
+  kind: "read" | "change";
+  risk_level: RiskLevel;
+  required_permission: ToolPermission;
+  timeout_seconds: number;
+  verify_with: string | null;
+  enabled: boolean;
+  status: ToolDefinitionStatus;
+  schema_hash: string;
+  approved_schema_hash: string | null;
+  approved_by: string | null;
+  last_synced_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string | null;
+  usable: boolean;
+}
+
+export interface ToolDefinitionUpdate {
+  description?: string;
+  kind?: "read" | "change";
+  risk_level?: RiskLevel;
+  required_permission?: ToolPermission;
+  timeout_seconds?: number;
+  verify_with?: string;
+  clear_verify_with?: boolean;
+  enabled?: boolean;
+  approve_schema?: boolean;
+}
+
+export interface ToolParam {
+  name: string;
+  type: "string" | "integer" | "number" | "boolean";
+  description: string;
+  required: boolean;
+  enum?: (string | number)[] | null;
+  pattern?: string | null;
+  max_length?: number | null;
+  minimum?: number | null;
+  maximum?: number | null;
+}
+
+export interface HttpToolInput {
+  integration_id: string;
+  name: string;
+  description: string;
+  parameters: ToolParam[];
+  template: Partial<HttpTemplate> & Pick<HttpTemplate, "method" | "path">;
+  kind: "read" | "change";
+  risk_level: RiskLevel;
+  timeout_seconds: number;
+  verify_with?: string | null;
+  enabled: boolean;
+}
+
+export interface ToolSyncResult {
+  server: { name?: string; version?: string };
+  total: number;
+  added: string[];
+  changed: string[];
+  missing: string[];
+  unchanged: number;
+}
+
+export interface AgentCreateInput {
+  name: string;
+  description: string;
+  slug?: string | null;
+  model_id?: string | null;
+  enabled?: boolean;
+  allowed_tools: string[];
+  instructions?: string;
+  max_steps?: number;
+  temperature?: number;
+  max_tokens?: number;
+  timeout_seconds?: number;
+  max_retries?: number;
 }

@@ -57,7 +57,7 @@ export const NAVIGATION: NavGroup[] = [
   {
     label: "Intelligence",
     items: [
-      { label: "Knowledge Base", path: "/knowledge", icon: BookOpen, permission: "knowledge.read", phase: 6 },
+      { label: "Knowledge Base", path: "/knowledge", icon: BookOpen, permission: "knowledge.read" },
       { label: "Agents", path: "/agents", icon: Bot, permission: "agent.read" },
       { label: "Tools & Integrations", path: "/integrations", icon: Plug, permission: "integration.read" },
     ],

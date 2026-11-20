@@ -25,6 +25,7 @@ def _load_migration(name: str) -> Any:
 def test_migration_seed_matches_catalogue() -> None:
     """New permission codes must ship with a migration that seeds them."""
     seeded = set(_load_migration("0001_foundation").PERMISSIONS_0001)
+    seeded |= set(_load_migration("0006_knowledge_extensibility").PERMISSIONS_0006)
     assert seeded == set(PERMISSIONS)
 
 

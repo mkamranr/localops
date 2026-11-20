@@ -1,4 +1,4 @@
-# Security Model (Phase 5)
+# Security Model (Phase 6)
 
 ## Authentication
 
@@ -227,6 +227,41 @@ State-changing actions are a separate, small catalogue of **remediation tools**
   app role cannot delete approvals or execution jobs. Audit actions: `approval.request`,
   `approval.auto_approve`, `approval.approve` / `reject` / `request_changes` / `cancel` /
   `expire`, `remediation.request`, `remediation.skip`, `remediation.execute` and `policy.*`.
+
+## Knowledge and registered tools (Phase 6)
+
+- **Tenant isolation in Qdrant.** Every vector point carries `tenant_id`, and every search
+  requires it as a filter. Hits are re-read from PostgreSQL under RLS, so a forged or stray
+  point referring to another tenant's chunk is dropped (tested).
+- **Prompt injection through knowledge.**
+  - Document text reaches models only inside `<knowledge … untrusted="true">` blocks.
+    Delimiter look-alikes (`<knowledge`, `<system`, `<operator_instructions`, …) are
+    neutralised.
+  - Prompts state that such text is never instructions.
+  - A root cause backed only by knowledge is *unverified*, and remediation steps need live
+    evidence.
+  - Tool allow-lists and the remediation gateway are enforced in code, whatever any text
+    says.
+- **MCP trust model.**
+  - Network transports only; no subprocesses.
+  - Every synced tool starts disabled. A `readOnlyHint` is treated as a hint, and anything
+    without it is classified as *change*.
+  - Enabling a tool pins a hash of its schema and description. A later change disables it
+    (`schema_changed`) until it is re-approved.
+  - Agents see the administrator-reviewed description.
+  - No redirects, no proxy environment variables, 2 MB response cap, redacted output.
+- **Custom HTTP tools.**
+  - Each placeholder fills a single percent-encoded path segment.
+  - The final URL must keep the base URL's scheme, host and path prefix.
+  - Redirects are refused, header values cannot contain CR or LF, and the body is built as
+    JSON.
+  - Credentials are stored encrypted and never returned.
+- **Permissions.**
+  - `tool.manage` registers, classifies and enables tools.
+  - Manual runs need each tool's `required_permission`. Change tools are never run directly
+    and never given to agents; they go through policy, approval and the gateway.
+  - `agent.configure` is required to change agent tools or instructions or to create custom
+    agents. No LLM tool can change configuration, and every change is audited.
 
 ## Secrets at rest
 

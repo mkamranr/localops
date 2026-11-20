@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Cpu, Pencil, Plus, Server, Star, Trash2, Wifi, Zap } from "lucide-react";
+import { Activity, Cpu, Database, Pencil, Plus, Server, Star, Trash2, Wifi, Zap } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { errorMessage } from "@/api/client";
 import { modelsApi, type ModelInput } from "@/api/endpoints";
@@ -9,7 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Alert, Badge, EmptyState, ErrorState, Spinner, StatusDot } from "@/components/ui/display";
 import { Field, Input, Select } from "@/components/ui/form";
 import { useAuthStore } from "@/stores/authStore";
-import type { ModelEndpoint, ModelTestResult, Provider } from "@/types/api";
+import type { ModelEndpoint, ModelPurpose, ModelTestResult, Provider } from "@/types/api";
 import { formatRelative } from "@/utils/format";
 
 const PROVIDERS: { value: Provider; label: string; url: string }[] = [
@@ -18,6 +18,16 @@ const PROVIDERS: { value: Provider; label: string; url: string }[] = [
   { value: "llamacpp", label: "llama.cpp server", url: "http://llamacpp:8080/v1" },
   { value: "openai_compatible", label: "OpenAI-compatible", url: "http://llm-gateway:8000/v1" },
 ];
+
+const EMBEDDING_HINT =
+  "Used for semantic knowledge search, e.g. Ollama nomic-embed-text. Without one, search is keyword-only.";
+
+const PURPOSES: { value: ModelPurpose; label: string }[] = [
+  { value: "chat", label: "Chat (agents)" },
+  { value: "embedding", label: "Embedding (knowledge search)" },
+];
+
+const purposeOf = (m: ModelEndpoint): ModelPurpose => m.purpose ?? "chat";
 
 const STATUS = {
   healthy: { tone: "success" as const, label: "Connected" },
@@ -43,6 +53,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
   const queryClient = useQueryClient();
   const [form, setForm] = useState(() => ({
     name: model?.name ?? "",
+    purpose: model ? purposeOf(model) : ("chat" as ModelPurpose),
     provider: model?.provider ?? ("ollama" as Provider),
     base_url: model?.base_url ?? "http://ollama:11434",
     model_name: model?.model_name ?? "",
@@ -61,6 +72,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
     mutationFn: () => {
       const body: ModelInput = {
         name: form.name.trim(),
+        purpose: form.purpose,
         provider: form.provider,
         base_url: form.base_url.trim(),
         model_name: form.model_name.trim(),
@@ -118,10 +130,15 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
             </Select>
           </Field>
         </div>
+        <Field label="Purpose" htmlFor="m-purpose" hint={form.purpose === "embedding" ? EMBEDDING_HINT : "Chat models run the agents."}>
+          <Select id="m-purpose" value={form.purpose} onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value as ModelPurpose }))}>
+            {PURPOSES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+          </Select>
+        </Field>
         <Field label="Base URL" htmlFor="m-url" hint="Reachable from the LocalOps worker. /v1 is added automatically.">
           <Input id="m-url" value={form.base_url} onChange={set("base_url")} required className="font-mono" />
         </Field>
-        <Field label="Model" htmlFor="m-model" hint="As listed by the server, e.g. qwen2.5:14b-instruct or meta-llama/Llama-3.1-8B-Instruct">
+        <Field label="Model" htmlFor="m-model" hint={form.purpose === "embedding" ? "As listed by the server, e.g. nomic-embed-text or BAAI/bge-m3" : "As listed by the server, e.g. qwen2.5:14b-instruct or meta-llama/Llama-3.1-8B-Instruct"}>
           <Input id="m-model" value={form.model_name} onChange={set("model_name")} required className="font-mono" />
         </Field>
         <div className="grid grid-cols-3 gap-4">
@@ -131,6 +148,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
           <Field label="Retries" htmlFor="m-retries">
             <Input id="m-retries" type="number" min={0} max={5} value={form.max_retries} onChange={set("max_retries")} />
           </Field>
+          {form.purpose === "chat" && (
           <Field label="JSON mode" htmlFor="m-json">
             <Select id="m-json" value={form.structured_output} onChange={set("structured_output")}>
               <option value="json_object">json_object</option>
@@ -138,7 +156,10 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
               <option value="none">prompt only</option>
             </Select>
           </Field>
+          )}
         </div>
+        {form.purpose === "chat" && (
+        <>
         <Field
           label="Reasoning (thinking)"
           htmlFor="m-thinking"
@@ -161,6 +182,8 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
             <option value="json">JSON actions in the reply</option>
           </Select>
         </Field>
+        </>
+        )}
         <Field label="API key (optional)" htmlFor="m-key" hint={model?.has_api_key ? "A key is stored (encrypted). Leave blank to keep it." : "Stored encrypted with LOCALOPS_ENCRYPTION_KEY."}>
           <Input id="m-key" type="password" value={form.api_key} onChange={set("api_key")} autoComplete="new-password" />
         </Field>
@@ -175,7 +198,7 @@ function ModelDialog({ model, open, onOpenChange }: { model: ModelEndpoint | nul
         </Field>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={form.is_default} onChange={(e) => setForm((f) => ({ ...f, is_default: e.target.checked }))} className="size-4" />
-          Use as the default model for agents
+          {form.purpose === "embedding" ? "Use as the default embedding model (knowledge search)" : "Use as the default chat model for agents"}
         </label>
         {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
       </form>
@@ -203,7 +226,8 @@ function ModelCard({ model, canManage, onEdit }: { model: ModelEndpoint; canMana
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold">{model.name}</h3>
             <Badge className="uppercase">{provider}</Badge>
-            {model.is_default && <Badge tone="primary"><Star className="size-3" /> default</Badge>}
+            <Badge tone={purposeOf(model) === "embedding" ? "violet" : "neutral"}>{purposeOf(model)}</Badge>
+            {model.is_default && <Badge tone="primary"><Star className="size-3" /> default {purposeOf(model)} model</Badge>}
             {!model.enabled && <Badge>disabled</Badge>}
           </div>
           <p className="mt-0.5 text-xs text-muted">{model.description || model.base_url}</p>
@@ -257,6 +281,9 @@ function ModelCard({ model, canManage, onEdit }: { model: ModelEndpoint; canMana
                 Reachable in {formatDuration(result.latency_ms)} ·{" "}
                 {result.model_available === false ? <span className="text-amber-300">model not listed by the server</span> : "model available"}
               </p>
+              {result.dimensions != null && (
+                <p className="text-xs text-muted">Embedding dimensions: <span className="font-mono text-fg">{result.dimensions}</span></p>
+              )}
               {result.reply && <p className="text-xs text-muted">Probe reply: <span className="font-mono text-fg">{result.reply}</span></p>}
               {!!result.models.length && (
                 <p className="text-xs text-muted">Server models: <span className="font-mono">{result.models.slice(0, 12).join(", ")}{result.models.length > 12 ? "…" : ""}</span></p>
@@ -279,7 +306,8 @@ export function ModelsPage() {
   if (query.isLoading) return <Spinner />;
   if (query.error || !query.data) return <ErrorState message={errorMessage(query.error)} onRetry={() => query.refetch()} />;
   const models = query.data;
-  const def = models.find((m) => m.is_default);
+  const def = models.find((m) => m.is_default && purposeOf(m) === "chat");
+  const embed = models.find((m) => m.is_default && purposeOf(m) === "embedding");
   const healthy = models.filter((m) => m.last_status === "healthy");
   const latencies = healthy.map((m) => m.last_latency_ms ?? 0).filter(Boolean);
   const avg = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null;
@@ -296,14 +324,14 @@ export function ModelsPage() {
         )}
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard label="Default model" value={def?.name ?? "None"} icon={Cpu} tone="bg-emerald-600/20 text-emerald-300" />
+        <SummaryCard label="Default chat model" value={def?.name ?? "None"} icon={Cpu} tone="bg-emerald-600/20 text-emerald-300" />
         <SummaryCard label="Connected" value={`${healthy.length} / ${models.length}`} icon={Wifi} tone="bg-blue-600/20 text-blue-300" />
         <SummaryCard label="Avg response" value={avg != null ? formatDuration(avg) : "—"} icon={Activity} tone="bg-violet-600/20 text-violet-300" />
-        <SummaryCard label="Enabled endpoints" value={models.filter((m) => m.enabled).length} icon={Server} tone="bg-amber-600/20 text-amber-300" />
+        <SummaryCard label="Default embedding model" value={embed?.name ?? "None (keyword search)"} icon={Database} tone="bg-amber-600/20 text-amber-300" />
       </div>
       {!models.length ? (
         <div className="panel">
-          <EmptyState title="No model endpoints" description="Add an Ollama, vLLM or other OpenAI-compatible endpoint so agents can run." />
+          <EmptyState title="No model endpoints" description="Add an Ollama, vLLM or other OpenAI-compatible endpoint so agents can run. Add an embedding model to enable semantic knowledge search." />
         </div>
       ) : (
         models.map((m) => <ModelCard key={m.id} model={m} canManage={canManage} onEdit={() => { setEditing(m); setOpen(true); }} />)

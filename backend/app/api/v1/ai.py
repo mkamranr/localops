@@ -14,6 +14,7 @@ from app.api.dependencies import (
 )
 from app.core.config import Settings
 from app.schemas.ai import (
+    AgentCreate,
     AgentExecutionOut,
     AgentOut,
     AgentUpdate,
@@ -98,13 +99,38 @@ async def list_agents(
 async def list_executions(
     page: PageParams = Depends(),
     agent_type: str | None = Query(None, max_length=50),
+    status: str | None = Query(None, pattern="^(running|success|failed)$"),
+    errors_only: bool = False,
     investigation_id: uuid.UUID | None = None,
     ctx: RequestContext = Depends(require_permission("agent.read")),
 ) -> Page[AgentExecutionOut]:
     rows, total = await agent_service.list_executions(
-        ctx, page, agent_type=agent_type, investigation_id=investigation_id
+        ctx,
+        page,
+        agent_type=agent_type,
+        investigation_id=investigation_id,
+        status=status,
+        errors_only=errors_only,
     )
     return Page(items=rows, total=total, page=page.page, page_size=page.page_size)
+
+
+@router.post("/agents", response_model=AgentOut, status_code=201)
+async def create_agent(
+    body: AgentCreate,
+    ctx: RequestContext = Depends(require_permission("agent.configure")),
+) -> AgentOut:
+    """Create a custom specialist: a tool-loop agent limited to the given read tools."""
+    return await agent_service.create_agent(ctx, body)
+
+
+@router.delete("/agents/{agent_id}", status_code=204)
+async def delete_agent(
+    agent_id: uuid.UUID,
+    ctx: RequestContext = Depends(require_permission("agent.configure")),
+) -> Response:
+    await agent_service.delete_agent(ctx, agent_id)
+    return Response(status_code=204)
 
 
 @router.get("/agents/{agent_id}", response_model=AgentOut)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from app.tools import docker, inventory, linux, network, remediation, windows
+from app.tools import docker, inventory, knowledge, linux, network, remediation, windows
 from app.tools.base import ToolSpec
 
 READ_TOOLS: Final[tuple[ToolSpec, ...]] = (
@@ -13,6 +13,7 @@ READ_TOOLS: Final[tuple[ToolSpec, ...]] = (
     *docker.TOOLS,
     *network.TOOLS,
     *inventory.TOOLS,
+    *knowledge.TOOLS,
 )
 # State-changing tools: only the execution gateway runs these (phase 5).
 CHANGE_TOOLS: Final[tuple[ToolSpec, ...]] = remediation.TOOLS
@@ -57,7 +58,7 @@ AGENT_TOOLS: Final[dict[str, tuple[str, ...]]] = {
         "net_tcp_check",
         "net_http_check",
     ),
-    "knowledge": ("search_similar_incidents",),
+    "knowledge": ("search_similar_incidents", "search_knowledge"),
 }
 
 

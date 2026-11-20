@@ -3,7 +3,7 @@
 **Open-source, AI-powered infrastructure operations and autonomous troubleshooting platform.**
 Self-hosted, multi-tenant, and designed to run in connected or fully air-gapped environments.
 
-> Status: **Phase 5 – Controlled remediation** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
+> Status: **Phase 6 – Knowledge and extensibility** (see [ProjectSpecification.md](ProjectSpecification.md) §20).
 >
 > - **Phase 1:** authentication, tenants, RBAC, audit, dashboard, Compose deployment.
 > - **Phase 2:** a model gateway for Ollama, vLLM, llama.cpp and any OpenAI-compatible server;
@@ -26,6 +26,13 @@ Self-hosted, multi-tenant, and designed to run in connected or fully air-gapped 
 >   - an execution gateway that re-checks every approval at run time, and a Verification agent
 >     that confirms the result;
 >   - autonomous mode for policy-allowed, low-risk actions only.
+> - **Phase 6** ([docs/knowledge.md](docs/knowledge.md)):
+>   - a knowledge base of runbooks, documents, and past incidents and investigations, with
+>     hybrid keyword and semantic search (Qdrant plus an embedding model through the gateway);
+>   - MCP tool servers and custom HTTP tools: disabled until an administrator reviews them,
+>     classified as read or change, and schema-pinned;
+>   - per-agent tool lists, step limits and operator instructions, and custom specialist
+>     agents.
 
 ## Quick start (Docker Compose)
 

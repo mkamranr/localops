@@ -22,6 +22,7 @@ log = get_logger("localops.dispatch")
 
 JOB_NAME = "run_investigation"
 DISCOVERY_JOB = "run_discovery"
+INDEX_JOB = "index_knowledge_document"
 QUEUE_NAME = "localops:queue"
 
 
@@ -31,6 +32,8 @@ class InvestigationDispatcher(Protocol):
     ) -> None: ...
 
     async def enqueue_discovery(self, tenant_id: uuid.UUID, run_id: uuid.UUID) -> None: ...
+
+    async def enqueue_index(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -57,6 +60,15 @@ class ArqDispatcher:
             str(tenant_id),
             str(run_id),
             _job_id=f"discovery:{run_id}",
+            _queue_name=QUEUE_NAME,
+        )
+
+    async def enqueue_index(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> None:
+        await self._pool.enqueue_job(
+            INDEX_JOB,
+            str(tenant_id),
+            str(document_id),
+            _job_id=f"index:{document_id}:{uuid.uuid4().hex[:8]}",
             _queue_name=QUEUE_NAME,
         )
 
@@ -99,6 +111,17 @@ class InlineDispatcher:
 
         task: asyncio.Task[object] = asyncio.create_task(
             run_discovery(self.settings, tenant_id=tenant_id, run_id=run_id, redis=self.redis)
+        )
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def enqueue_index(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> None:
+        from app.knowledge.indexer import index_document
+
+        task: asyncio.Task[object] = asyncio.create_task(
+            index_document(
+                self.settings, tenant_id, document_id, client_factory=self.client_factory
+            )
         )
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)

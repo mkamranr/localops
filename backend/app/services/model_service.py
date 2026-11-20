@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -13,7 +15,7 @@ from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.errors import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.database.session import tenant_session
-from app.llm.gateway import EndpointConfig, ModelClient
+from app.llm.gateway import EndpointConfig, ModelClient, ModelError
 from app.models import Agent, ModelEndpoint
 from app.schemas.ai import (
     ModelEndpointCreate,
@@ -58,10 +60,16 @@ async def _name_taken(session: AsyncSession, name: str, exclude: uuid.UUID | Non
     return bool(await session.scalar(q))
 
 
-async def _clear_default(session: AsyncSession, tenant_id: uuid.UUID) -> None:
+async def _clear_default(
+    session: AsyncSession, tenant_id: uuid.UUID, purpose: str = "chat"
+) -> None:
     await session.execute(
         update(ModelEndpoint)
-        .where(ModelEndpoint.tenant_id == tenant_id, ModelEndpoint.is_default.is_(True))
+        .where(
+            ModelEndpoint.tenant_id == tenant_id,
+            ModelEndpoint.purpose == purpose,
+            ModelEndpoint.is_default.is_(True),
+        )
         .values(is_default=False)
     )
 
@@ -72,14 +80,22 @@ async def create_model(
     s, p = ctx.session, ctx.principal
     if await _name_taken(s, data.name):
         raise ConflictError("A model with this name already exists", details={"field": "name"})
-    has_any = bool(await s.scalar(select(func.count()).select_from(ModelEndpoint)))
-    make_default = data.is_default or not has_any  # first model becomes the default
+    has_any = bool(
+        await s.scalar(
+            select(func.count())
+            .select_from(ModelEndpoint)
+            .where(ModelEndpoint.purpose == data.purpose)
+        )
+    )
+    # The first model of each purpose becomes its default.
+    make_default = data.is_default or not has_any
     if make_default:
-        await _clear_default(s, p.tenant_id)
+        await _clear_default(s, p.tenant_id, data.purpose)
     model = ModelEndpoint(
         tenant_id=p.tenant_id,
         name=data.name.strip(),
         provider=data.provider,
+        purpose=data.purpose,
         base_url=data.base_url,
         model_name=data.model_name.strip(),
         description=data.description,
@@ -105,6 +121,7 @@ async def create_model(
             "name": model.name,
             "provider": model.provider,
             "model": model.model_name,
+            "purpose": model.purpose,
             "base_url": model.base_url,
             "default": model.is_default,
         },
@@ -128,6 +145,12 @@ async def update_model(
         if value is not None and value != getattr(model, field):
             setattr(model, field, value)
             changes[field] = value
+    if data.purpose is not None and data.purpose != model.purpose:
+        model.purpose = changes["purpose"] = data.purpose
+        model.is_default = False
+        if data.purpose == "embedding":
+            # Agents cannot chat with an embedding model.
+            await s.execute(update(Agent).where(Agent.model_id == model.id).values(model_id=None))
     if data.configuration is not None:
         model.configuration = data.configuration.model_dump(exclude_none=True)
         changes["configuration"] = model.configuration
@@ -138,7 +161,7 @@ async def update_model(
         model.encrypted_api_key = encrypt_secret(settings, data.api_key.get_secret_value())
         changes["api_key"] = "replaced"
     if data.is_default is True and not model.is_default:
-        await _clear_default(s, p.tenant_id)
+        await _clear_default(s, p.tenant_id, model.purpose)
         await s.refresh(model)
         model.is_default = True
         changes["is_default"] = True
@@ -211,7 +234,26 @@ async def test_model(
         model = await get_model(s, model_id)
         config = endpoint_config(settings, model)
         model_name = model.model_name
-    health = await ModelClient(config).health()
+        purpose = model.purpose
+    dimensions: int | None = None
+    if purpose == "embedding":
+        health = await ModelClient(config).health(probe=None)
+        if health.ok:
+            try:
+                start = time.perf_counter()
+                vectors = await ModelClient(dataclasses.replace(config, max_retries=0)).embed(
+                    ["ping"]
+                )
+                dimensions = len(vectors[0])
+                health = dataclasses.replace(
+                    health,
+                    latency_ms=round((time.perf_counter() - start) * 1000, 1),
+                    reply=f"{dimensions}-dimensional embedding",
+                )
+            except ModelError as exc:
+                health = dataclasses.replace(health, ok=False, error=str(exc))
+    else:
+        health = await ModelClient(config).health()
     status = "healthy" if health.ok else "unhealthy"
     error = (health.error or "")[:500] or None
     if health.ok and health.model_available is False:
@@ -223,6 +265,8 @@ async def test_model(
         model.last_status = status
         model.last_latency_ms = health.latency_ms
         model.last_error = error
+        if dimensions:
+            model.configuration = {**model.configuration, "dimensions": dimensions}
         await s.flush()
         await audit.record(
             s,
@@ -242,6 +286,7 @@ async def test_model(
         model_available=health.model_available,
         reply=health.reply,
         error=error,
+        dimensions=dimensions,
     )
 
 
@@ -251,7 +296,9 @@ async def ensure_env_default_model(
     """Seed a default endpoint from ``LLM_*`` settings if the tenant has none."""
     if not settings.llm_base_url or not settings.llm_model:
         return False
-    if await session.scalar(select(func.count()).select_from(ModelEndpoint)):
+    if await session.scalar(
+        select(func.count()).select_from(ModelEndpoint).where(ModelEndpoint.purpose == "chat")
+    ):
         return False
     session.add(
         ModelEndpoint(
@@ -268,3 +315,51 @@ async def ensure_env_default_model(
     )
     await session.flush()
     return True
+
+
+async def ensure_env_embedding_model(
+    session: AsyncSession, settings: Settings, tenant_id: uuid.UUID
+) -> bool:
+    """Seed a default embedding endpoint from ``EMBEDDING_*`` settings if none exists."""
+    if not settings.embedding_base_url or not settings.embedding_model:
+        return False
+    if await session.scalar(
+        select(func.count()).select_from(ModelEndpoint).where(ModelEndpoint.purpose == "embedding")
+    ):
+        return False
+    session.add(
+        ModelEndpoint(
+            tenant_id=tenant_id,
+            name="Default embedding model",
+            provider=settings.embedding_provider,
+            purpose="embedding",
+            base_url=settings.embedding_base_url.rstrip("/"),
+            model_name=settings.embedding_model,
+            description="Created from the EMBEDDING_* environment settings at bootstrap.",
+            configuration={"timeout_seconds": 60, "max_retries": 2},
+            enabled=True,
+            is_default=True,
+        )
+    )
+    await session.flush()
+    return True
+
+
+async def default_embedding_endpoint(
+    session: AsyncSession, settings: Settings
+) -> tuple[EndpointConfig, str] | None:
+    """The tenant's enabled default embedding endpoint (session in tenant context).
+
+    Returns the client config and a stable fingerprint used to name the vector
+    collection, so switching models never mixes incompatible vectors.
+    """
+    model = await session.scalar(
+        select(ModelEndpoint).where(
+            ModelEndpoint.purpose == "embedding",
+            ModelEndpoint.is_default.is_(True),
+            ModelEndpoint.enabled.is_(True),
+        )
+    )
+    if model is None:
+        return None
+    return endpoint_config(settings, model), f"{model.provider}:{model.base_url}:{model.model_name}"

@@ -120,7 +120,16 @@ def judge(
         )
         return _verdict(bool(snap.get("ok")), tool, reasons)
 
-    ok = all(v.get("ok") for v in after.values()) if after else True
+    if not after:
+        # Nothing re-checked the system: never report success that nobody observed.
+        return Verdict(
+            "failed",
+            "Not verified: no verification tool is configured for this action; "
+            "verify the result manually",
+            ["no verification tool configured"],
+        )
+    ok = all(v.get("ok") for v in after.values())
+    reasons += [f"{name}: {v.get('summary')}" for name, v in after.items()]
     return _verdict(ok, tool, reasons or ["verification tools ran"])
 
 

@@ -1,4 +1,4 @@
-# AI Orchestration (Phase 5)
+# AI Orchestration (Phase 6)
 
 - **Phase 2:** the model gateway, the agent registry, the LangGraph investigation workflow with
   persistent checkpoints, and live progress streaming.
@@ -95,16 +95,28 @@ timeout and retries.
 | Infrastructure Diagnostics | Phase 4 | LLM tool loop: hosts (CPU, memory, disk, processes, services, journal, event log) |
 | Application Diagnostics | Phase 4 | LLM tool loop: containers and HTTP services (state, restarts, logs, health checks, recent changes) |
 | Network Diagnostics | Phase 4 | LLM tool loop: DNS, TCP and HTTP reachability *from LocalOps* to inventoried resources |
-| Knowledge | Phase 4 | Deterministic: similar past incidents and investigations (PostgreSQL full-text search plus shared resources). Runbooks and vector search come in Phase 6 |
+| Knowledge | Phase 6 | Deterministic: similar past incidents and investigations (full-text, shared resources and semantic search) plus up to three runbook or troubleshooting matches, as `knowledge` evidence. See [knowledge.md](knowledge.md) |
 | Incident Triage | Phase 4 | Deterministic: severity and priority from health, environment, blast radius and open incidents |
 | Change Impact | Phase 4 | Deterministic: direct and indirect dependents, risk level, precautions, approvals |
 | Root Cause Analysis | Phase 4 | LLM, after aggregation, with deterministic guards |
 | Remediation Planner | Phase 5 | LLM: proposes up to `REMEDIATION_MAX_STEPS` registered remediation tools, each citing evidence |
 | Verification | Phase 5 | Deterministic: re-runs the action's read-only verify tools and compares before/after |
 
-The Supervisor may plan tasks for any specialist. Tasks for agents that don't exist yet are
-recorded as **skipped** with the reason. Root Cause Analysis is never planned; it always runs
-after the specialists.
+The Supervisor plans only agents that are enabled for the tenant. The agent list in its
+prompt is built for each investigation, built-in and custom agents together, each with the
+tools it would actually get. Root Cause Analysis is never planned; it always runs after the
+specialists.
+
+**Configuration (Phase 6).** Tool-using agents (the diagnostics agents and custom agents)
+also accept:
+
+- `allowed_tools`: read tools only, validated against the tenant's catalogue;
+- `max_steps` (1–15);
+- `instructions`: up to 2000 characters, appended after the safety rules in an
+  `<operator_instructions>` block.
+
+**Custom agents** (`POST /agents`) are `custom_<slug>` tool-loop specialists with their own
+description, tools, instructions and model.
 
 ## Read-only diagnostic tools (`app/tools/`)
 

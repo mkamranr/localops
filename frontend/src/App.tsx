@@ -44,6 +44,11 @@ const PoliciesPage = lazy(() => import("@/pages/settings/PoliciesPage").then((m)
 const InvestigationDetailPage = lazy(() =>
   import("@/pages/investigations/InvestigationDetailPage").then((m) => ({ default: m.InvestigationDetailPage })),
 );
+const KnowledgePage = lazy(() => import("@/pages/knowledge/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
+const KnowledgeDocumentPage = lazy(() =>
+  import("@/pages/knowledge/KnowledgeDocumentPage").then((m) => ({ default: m.KnowledgeDocumentPage })),
+);
+const ToolsPage = lazy(() => import("@/pages/settings/ToolsPage").then((m) => ({ default: m.ToolsPage })));
 const IntegrationsPage = lazy(() => import("@/pages/IntegrationsPage").then((m) => ({ default: m.IntegrationsPage })));
 const lazyPage = (node: ReactNode) => <Suspense fallback={<Spinner />}>{node}</Suspense>;
 
@@ -161,6 +166,8 @@ export function AppRoutes() {
         <Route path="infrastructure" element={<RequirePermission permission="resource.read"><InfrastructurePage /></RequirePermission>} />
         <Route path="infrastructure/:id" element={<RequirePermission permission="resource.read">{lazyPage(<ResourceDetailPage />)}</RequirePermission>} />
         <Route path="dependencies" element={<RequirePermission permission="resource.read">{lazyPage(<DependenciesPage />)}</RequirePermission>} />
+        <Route path="knowledge" element={<RequirePermission permission="knowledge.read">{lazyPage(<KnowledgePage />)}</RequirePermission>} />
+        <Route path="knowledge/:id" element={<RequirePermission permission="knowledge.read">{lazyPage(<KnowledgeDocumentPage />)}</RequirePermission>} />
         <Route path="integrations" element={<RequirePermission permission="integration.read">{lazyPage(<IntegrationsPage />)}</RequirePermission>} />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="account" replace />} />
@@ -168,6 +175,7 @@ export function AppRoutes() {
           <Route path="users" element={<RequirePermission permission="user.read"><UsersPage /></RequirePermission>} />
           <Route path="roles" element={<RequirePermission permission="role.read"><RolesPage /></RequirePermission>} />
           <Route path="models" element={<RequirePermission permission="settings.read"><ModelsPage /></RequirePermission>} />
+          <Route path="tools" element={<RequirePermission permission="integration.read">{lazyPage(<ToolsPage />)}</RequirePermission>} />
           <Route path="policies" element={<RequirePermission permission="settings.read">{lazyPage(<PoliciesPage />)}</RequirePermission>} />
           <Route path="tenants" element={<RequirePermission permission="tenant.manage"><TenantsPage /></RequirePermission>} />
         </Route>

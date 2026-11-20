@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-IMPLEMENTED_PHASE: Final = 5
+IMPLEMENTED_PHASE: Final = 6
 
 DEFAULT_AGENT_CONFIG: Final[dict[str, Any]] = {
     "temperature": 0.1,
@@ -19,7 +19,12 @@ DEFAULT_AGENT_CONFIG: Final[dict[str, Any]] = {
     "timeout_seconds": 120,
     "max_retries": 2,
     "allowed_tools": [],
+    "max_steps": 6,
+    "instructions": "",
 }
+
+# Operator-defined tool-loop specialists are stored as agents rows named custom_<slug>.
+CUSTOM_PREFIX: Final = "custom_"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +127,7 @@ CATALOGUE: Final[tuple[AgentSpec, ...]] = (
         "knowledge",
         "Knowledge Agent",
         "Searches past incidents and investigations for similar issues and their "
-        "resolutions (runbooks arrive with the knowledge base).",
+        "resolutions, and relevant runbooks and documentation from the knowledge base.",
         4,
         capabilities=("rag", "runbooks"),
     ),
@@ -134,6 +139,15 @@ SPECIALIST_TYPES: Final[tuple[str, ...]] = tuple(a.agent_type for a in CATALOGUE
 
 def get_spec(agent_type: str) -> AgentSpec | None:
     return BY_TYPE.get(agent_type)
+
+
+def is_custom(agent_type: str) -> bool:
+    return agent_type.startswith(CUSTOM_PREFIX)
+
+
+def custom_spec(agent_type: str, name: str, description: str) -> AgentSpec:
+    """Spec of a custom agent, built from its agents row."""
+    return AgentSpec(agent_type, name, description, IMPLEMENTED_PHASE, capabilities=("custom",))
 
 
 def merged_config(configuration: dict[str, Any] | None) -> dict[str, Any]:

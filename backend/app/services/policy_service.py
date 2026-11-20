@@ -22,8 +22,8 @@ from app.remediation.policy import (
 from app.schemas.remediation import PolicyIn, PolicyOut, PolicyPreviewIn, PolicyUpdate
 from app.services import audit_service as audit
 from app.services.context import RequestContext
+from app.tools import catalogue as tool_catalogue
 from app.tools.context import resource_info
-from app.tools.registry import get_tool
 
 
 async def ensure_policies(session: AsyncSession, tenant_id: uuid.UUID) -> int:
@@ -62,7 +62,7 @@ async def load_rules(session: AsyncSession) -> list[PolicyRule]:
 
 
 async def decide(session: AsyncSession, tool_name: str, resource: Resource, mode: str) -> Decision:
-    spec = get_tool(tool_name)
+    spec = (await tool_catalogue.load(session)).get(tool_name)
     if spec is None or not spec.is_change:
         raise ValidationFailedError(f"'{tool_name}' is not a remediation tool")
     return evaluate(
@@ -154,7 +154,7 @@ async def preview(ctx: RequestContext, data: PolicyPreviewIn) -> dict[str, Any]:
     resource = await ctx.session.get(Resource, data.resource_id)
     if resource is None:
         raise NotFoundError("Resource not found")
-    spec = get_tool(data.tool)
+    spec = (await tool_catalogue.load(ctx.session)).get(data.tool)
     if spec is None or not spec.is_change:
         raise ValidationFailedError(f"'{data.tool}' is not a remediation tool")
     if resource.resource_type not in spec.resource_types:
