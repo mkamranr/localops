@@ -2,14 +2,47 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 from sqlalchemy.engine import URL
 
 _PLACEHOLDER = "CHANGE_ME"
+
+
+class FileSecretsSource(PydanticBaseSettingsSource):
+    """Docker-secrets convention: ``<NAME>_FILE=/run/secrets/x`` reads NAME from that file.
+
+    Works for every setting (APP_SECRET_KEY_FILE, DB_APP_PASSWORD_FILE,
+    LOCALOPS_ENCRYPTION_KEY_FILE, ...). A ``_FILE`` value takes precedence over the plain
+    variable, so a stale value left in ``.env`` cannot shadow the mounted secret.
+    """
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        environ = {k.upper(): v for k, v in os.environ.items()}
+        values: dict[str, Any] = {}
+        for name, field in self.settings_cls.model_fields.items():
+            key = field.validation_alias if isinstance(field.validation_alias, str) else name
+            path = environ.get(f"{key.upper()}_FILE")
+            if not path:
+                continue
+            try:
+                values[key] = Path(path).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise ValueError(f"{key.upper()}_FILE: cannot read {path}: {exc.strerror}") from exc
+        return values
 
 
 class Settings(BaseSettings):
@@ -86,6 +119,23 @@ class Settings(BaseSettings):
     discovery_max_targets: int = Field(500, ge=1, le=5000)  # per integration
     metric_retention_days: int = Field(30, ge=1, le=3650)
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            FileSecretsSource(settings_cls),
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+        )
+
     @model_validator(mode="after")
     def _reject_placeholders(self) -> Settings:
         if self.app_env == "production":
@@ -95,7 +145,26 @@ class Settings(BaseSettings):
                 value: SecretStr = getattr(self, name)
                 if not value.get_secret_value() or _PLACEHOLDER in value.get_secret_value():
                     raise ValueError(f"{name.upper()} must be set to a real secret in production")
+            self._check_encryption_key()
         return self
+
+    def _check_encryption_key(self) -> None:
+        """Production refuses to start without a usable key for secrets at rest."""
+        from cryptography.fernet import Fernet
+
+        key = self.encryption_key.get_secret_value() if self.encryption_key else ""
+        if not key:
+            raise ValueError(
+                "LOCALOPS_ENCRYPTION_KEY must be set in production (it encrypts stored "
+                'credentials); generate one with: python3 -c "import base64, os; '
+                'print(base64.urlsafe_b64encode(os.urandom(32)).decode())"'
+            )
+        try:
+            Fernet(key.encode())
+        except ValueError as exc:
+            raise ValueError(
+                "LOCALOPS_ENCRYPTION_KEY is not a valid key (32 url-safe base64-encoded bytes)"
+            ) from exc
 
     def _db_url(self, user: str, password: SecretStr) -> URL:
         return URL.create(

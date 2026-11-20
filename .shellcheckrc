@@ -1,0 +1,3 @@
+# The `check && pass || fail` idiom is used deliberately: pass/ok/fail always return 0.
+disable=SC2015
+external-sources=true

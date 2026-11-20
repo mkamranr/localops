@@ -1,0 +1,8 @@
+# Test-only: simulates an air-gapped host. The internal network (every service except
+# the nginx edge) gets no route outside Docker, so any attempt by the application to
+# reach the internet fails. Used by the air-gap smoke workflow and scripts/security-check.sh.
+# Not for production: real installations need LAN access from api/worker to the
+# infrastructure they monitor and to the model server.
+networks:
+  internal:
+    internal: true

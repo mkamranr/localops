@@ -6,7 +6,7 @@ import httpx
 async def test_health(client: httpx.AsyncClient) -> None:
     r = await client.get("/api/v1/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    assert r.json()["status"] == "ok"
     assert len(r.headers["x-request-id"]) >= 8
     assert r.headers["x-content-type-options"] == "nosniff"
 

@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (lint, types, tests)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_DB: localops_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-superuser
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d localops_test"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      LOCALOPS_TEST_DB: "1"
+      APP_ENV: test
+      APP_SECRET_KEY: ci-secret-key-0123456789abcdef0123456789abcdef
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: localops_test
+      DB_OWNER_PASSWORD: ci-owner
+      DB_APP_PASSWORD: ci-app
+      QDRANT_URL: http://127.0.0.1:1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.22"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Ruff format
+        run: uv run --frozen ruff format --check app tests
+      - name: Ruff lint
+        run: uv run --frozen ruff check app tests
+      - name: Mypy
+        run: uv run --frozen mypy app
+      - name: Create database roles
+        working-directory: .
+        env:
+          PGHOST: localhost
+          PGPASSWORD: ci-superuser
+          POSTGRES_USER: postgres
+          POSTGRES_DB: localops_test
+          LOCALOPS_OWNER_PASSWORD: ci-owner
+          LOCALOPS_APP_PASSWORD: ci-app
+        run: bash deployment/postgres/init/01-roles.sh
+      - name: Tests (unit and integration)
+        run: uv run --frozen pytest -q -p no:cacheprovider
+
+  frontend:
+    name: Frontend (lint, types, tests, build)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.1"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npx vitest run
+      - run: npm run build
+
+  deployment:
+    name: Deployment (scripts, compose, images)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck -x scripts/*.sh deployment/postgres/init/*.sh .github/smoke/*.sh
+      - name: Compose files are valid
+        run: |
+          cp .env.example .env
+          sed -i 's/=CHANGE_ME/=ci-placeholder-value-0123456789abcdef/' .env
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.tls.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.secrets.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.airgap-test.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.bundle.yml -f docker-compose.tls.yml -f docker-compose.secrets.yml config --quiet
+          docker compose -f docker-compose.test.yml config --quiet
+      - name: Build images
+        run: |
+          docker build --target runtime -t localops-backend:ci backend
+          docker build -t localops-frontend:ci frontend
+      - name: Images run as non-root
+        run: |
+          test "$(docker image inspect -f '{{.Config.User}}' localops-backend:ci)" = "localops"
+          docker run --rm --network none localops-backend:ci python -m app.cli gen-cert --out-dir /tmp/tls --name ci.local
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    # Reports known vulnerabilities without blocking merges on upstream advisories.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.22"
+      - name: Python dependencies (pip-audit)
+        working-directory: backend
+        run: |
+          uv export --frozen --no-dev --no-hashes --no-emit-project > /tmp/requirements.txt
+          uvx pip-audit --strict -r /tmp/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.1"
+      - name: Node dependencies (npm audit)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high

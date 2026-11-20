@@ -1,4 +1,4 @@
-# Installation (Phase 6)
+# Installation
 
 ## Requirements
 
@@ -11,8 +11,9 @@
   classify and plan, but tend to call tools badly.
 - One free TCP port for the web UI (default `8300`).
 
-Air-gapped bundles (pre-exported images, checksums, SBOM) are delivered in Phase 7. Until then,
-build on a connected machine and transfer images with `docker save` / `docker load`.
+For servers without internet access, use the offline bundle and installer instead of the
+steps below: see [Air-gapped installation](airgap-installation.md). The installer generates
+every secret, sets up HTTPS and starts the stack. Backups are described in [backup.md](backup.md).
 
 ## 1. Configure
 
@@ -34,12 +35,17 @@ python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 | `LOCALOPS_APP_PASSWORD` | Runtime role for api/worker: not superuser, subject to row-level security. |
 | `BOOTSTRAP_ADMIN_PASSWORD` | Initial Super Administrator password (≥ 12 chars, must be changed at first sign-in). |
 | `COOKIE_SECURE` | Keep `true` behind HTTPS. Set `false` only for plain-HTTP evaluation. |
-| `LOCALOPS_HTTP_PORT` | Published port of the nginx reverse proxy. |
-| `LOCALOPS_ENCRYPTION_KEY` | Fernet key encrypting model API keys and integration credentials at rest. Required for integrations. Back it up separately. |
+| `LOCALOPS_HTTP_PORT` | Published port of the nginx reverse proxy (with TLS it only redirects to HTTPS). |
+| `LOCALOPS_HTTPS_PORT` | Published HTTPS port when `docker-compose.tls.yml` is used (default 8443). |
+| `LOCALOPS_ENCRYPTION_KEY` | Fernet key encrypting model API keys and integration credentials at rest. **Required in production** (the services refuse to start without a valid key). Back it up separately (`scripts/backup.sh` seals it in a keys file). |
 | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL` | Optional: seed a default model endpoint for every tenant at bootstrap. |
 | `INVESTIGATION_TIMEOUT_SECONDS` | Hard limit per investigation run (default 1800). |
 | `DISCOVERY_CONCURRENCY`, `DISCOVERY_MAX_TARGETS` | Targets collected in parallel (default 8), and the target cap per integration (default 500). |
 | `METRIC_RETENTION_DAYS` | How long resource metric samples are kept (default 30). |
+
+Any secret can instead come from a file: set `<NAME>_FILE` (for example
+`LOCALOPS_ENCRYPTION_KEY_FILE=/run/secrets/localops_encryption_key`). `docker-compose.secrets.yml`
+wires all of them to Docker secrets in `./secrets/`.
 
 > The database roles and passwords are created **once**, when the postgres volume is first
 > initialised. Changing them later requires `ALTER ROLE` inside PostgreSQL.
@@ -63,6 +69,21 @@ api, frontend ──────────────────────
 
 - tenant `system` with all seven built-in roles and the Super Administrator;
 - tenant `default` (if `BOOTSTRAP_CREATE_DEFAULT_TENANT=true`) with six roles, for regular users.
+
+### HTTPS
+
+Put the certificate and key in `deployment/tls/` and add the TLS override:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD/deployment/tls:/tls" --user "$(id -u):$(id -g)" \
+  api python -m app.cli gen-cert --out-dir /tls --name "$(hostname -f)"   # or copy your own server.crt/server.key
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+```
+
+nginx then serves HTTPS on `LOCALOPS_HTTPS_PORT` (TLS 1.2/1.3, HSTS) and redirects HTTP to it,
+and session cookies are marked `Secure`. To make this permanent, set
+`COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml` in `.env`. Without TLS, production
+logs a warning at startup when `COOKIE_SECURE=false`.
 
 ## 3. Verify
 

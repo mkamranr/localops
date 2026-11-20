@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
+from app import __version__
 from app.api.dependencies import redis_dep, require_permission, settings_dep
 from app.core.config import Settings
 from app.schemas.audit import AuditLogOut, DashboardSummary, ReadinessResponse
@@ -23,7 +24,7 @@ router = APIRouter()
 @router.get("/health", tags=["system"])
 async def health() -> dict[str, str]:
     """Liveness: the process is up and serving requests."""
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 
 @router.get("/ready", tags=["system"], response_model=ReadinessResponse)

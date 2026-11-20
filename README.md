@@ -9,20 +9,12 @@ problems through policy-controlled, approved remediation. Runs on your own hardw
 own models, in connected or completely air-gapped environments.
 
 <p>
-  <img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" />
-  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" />
-  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" />
-  <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agents-1C3C3C?style=flat-square" />
-  <img alt="React 18" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black" />
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" />
-</p>
-<p>
-  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-RLS-4169E1?style=flat-square&logo=postgresql&logoColor=white" />
-  <img alt="Redis" src="https://img.shields.io/badge/Redis-DC382D?style=flat-square&logo=redis&logoColor=white" />
-  <img alt="Qdrant" src="https://img.shields.io/badge/Qdrant-vector%20search-DC244C?style=flat-square" />
-  <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white" />
-  <img alt="Local LLMs" src="https://img.shields.io/badge/LLMs-Ollama%20%7C%20vLLM%20%7C%20llama.cpp-111827?style=flat-square" />
-  <img alt="Air-gapped ready" src="https://img.shields.io/badge/air--gapped-ready-16a34a?style=flat-square" />
+  <a href="https://github.com/mkamranr/localops/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/mkamranr/localops/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
+  <img alt="Docker Compose" src="https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white" />
+  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white" />
+  <img alt="FastAPI 0.163" src="https://img.shields.io/badge/FastAPI-0.163-009688?logo=fastapi&logoColor=white" />
+  <img alt="Offline: air-gapped" src="https://img.shields.io/badge/offline-air--gapped-2E7D32" />
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue" /></a>
 </p>
 
 [Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) ·
@@ -193,6 +185,11 @@ Open `http://<host>:8300` and sign in with tenant **`system`**, username **`admi
 
 See the [installation guide](docs/installation.md) for details.
 
+**Air-gapped servers:** build the offline bundle on a connected machine with
+`scripts/build-bundle.sh`, then run `scripts/install.sh` on the target. It loads every image
+from the bundle, generates secrets and a TLS certificate, and starts the stack with nothing
+downloaded. See [Air-gapped installation](docs/airgap-installation.md).
+
 ## Architecture
 
 ```mermaid
@@ -227,7 +224,9 @@ flowchart LR
 | [Architecture](docs/architecture.md) | Services, backend layout, data model, frontend |
 | [AI orchestration](docs/ai.md) | Model gateway, agents, tools, investigation and remediation workflows |
 | [Knowledge & extensibility](docs/knowledge.md) | Knowledge base, MCP servers, HTTP tools, agent configuration |
-| [Security](docs/security.md) | Authentication, RBAC, tenant isolation, AI safety, secrets, audit |
+| [Air-gapped installation](docs/airgap-installation.md) | Offline bundle: build, transfer, verify, install, TLS, upgrades |
+| [Backup & restore](docs/backup.md) | Backups, sealed keys file, scheduling, disaster recovery, tenant export |
+| [Security](docs/security.md) | Authentication, RBAC, tenant isolation, AI safety, secrets, hardening, audit |
 | [REST API](docs/api.md) | Endpoints and permissions |
 
 ## Roadmap
@@ -240,7 +239,7 @@ flowchart LR
 | 4 | Diagnostics agents, root cause analysis, incidents | ✅ Done |
 | 5 | Remediation planning, policies, approvals, execution gateway, verification | ✅ Done |
 | 6 | Knowledge base, MCP servers, custom tools and agents | ✅ Done |
-| 7 | Production images, offline bundle, model packaging, backup and restore | 🚧 Next |
+| 7 | Production images, offline bundle, model handling, backup and restore, hardening | ✅ Done |
 
 ## Development
 

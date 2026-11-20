@@ -1,0 +1,60 @@
+{
+  "format": "localops-model-manifest",
+  "format_version": 1,
+  "bundled": false,
+  "note": "LocalOps does not ship model weights or a model runtime. Run your own OpenAI-compatible model server (Ollama, vLLM, llama.cpp) inside the air gap and point LocalOps at it. See models/README.md.",
+  "requirements": {
+    "chat": "Instruction-tuned model with a 32k+ token context. Native tool calling recommended (LocalOps falls back to JSON-mode tool calls).",
+    "embedding": "Optional. Enables semantic knowledge search; without it search is keyword-only. Changing the embedding model requires re-indexing."
+  },
+  "recommended": [
+    {
+      "purpose": "chat",
+      "runtime": "ollama",
+      "model": "qwen2.5:14b-instruct",
+      "approx_size_gb": 9.0,
+      "min_vram_gb": 12,
+      "llm_base_url_example": "http://host.docker.internal:11434"
+    },
+    {
+      "purpose": "chat",
+      "runtime": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "approx_size_gb": 4.7,
+      "min_vram_gb": 8,
+      "notes": "smaller hosts; noticeably weaker root-cause analysis"
+    },
+    {
+      "purpose": "chat",
+      "runtime": "vllm",
+      "model": "Qwen/Qwen2.5-14B-Instruct",
+      "approx_size_gb": 30.0,
+      "min_vram_gb": 40,
+      "vllm_flags": "--enable-auto-tool-choice --tool-call-parser hermes --max-model-len 32768",
+      "llm_base_url_example": "http://gpu-node-01:8000/v1"
+    },
+    {
+      "purpose": "chat",
+      "runtime": "llamacpp",
+      "model": "Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+      "approx_size_gb": 9.0,
+      "llamacpp_flags": "--jinja -c 32768",
+      "llm_base_url_example": "http://model-host:8080/v1"
+    },
+    {
+      "purpose": "embedding",
+      "runtime": "ollama",
+      "model": "nomic-embed-text",
+      "approx_size_gb": 0.3,
+      "dimensions": 768
+    },
+    {
+      "purpose": "embedding",
+      "runtime": "vllm",
+      "model": "BAAI/bge-m3",
+      "approx_size_gb": 2.3,
+      "dimensions": 1024,
+      "vllm_flags": "--task embed"
+    }
+  ]
+}

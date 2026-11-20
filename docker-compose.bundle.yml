@@ -1,0 +1,14 @@
+# Offline bundle: every image was loaded from the bundle (scripts/install.sh) and must
+# never be pulled or built on the air-gapped host.
+x-offline: &offline
+  pull_policy: never
+
+services:
+  postgres: *offline
+  redis: *offline
+  qdrant: *offline
+  migrate: *offline
+  api: *offline
+  worker: *offline
+  frontend: *offline
+  nginx: *offline

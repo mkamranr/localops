@@ -1,0 +1,10 @@
+# Air-gap smoke test only: a stub OpenAI-compatible model server inside the simulated
+# air gap (reuses the backend image, so nothing extra is pulled).
+services:
+  stub-llm:
+    image: localops-backend:${LOCALOPS_VERSION}
+    pull_policy: never
+    command: ["python", "/stub/stub_llm.py"]
+    volumes:
+      - ./smoke-stub:/stub:ro
+    networks: [internal]

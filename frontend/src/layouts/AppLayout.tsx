@@ -73,7 +73,7 @@ export function AppLayout() {
     <div className="flex h-full">
       <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface">
         <Link to="/" className="flex items-center gap-3 px-5 py-5">
-          <img src="/favicon.svg" alt="" className="size-9" />
+          <img src="/logo-mark.png" alt="" className="size-9" />
           <div className="leading-tight">
             <div className="font-semibold tracking-tight">LocalOps</div>
             <div className="text-[11px] text-subtle">AI Infrastructure Operations</div>

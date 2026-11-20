@@ -4,6 +4,14 @@
 # (no superuser, no BYPASSRLS, so row-level security always applies to it).
 set -euo pipefail
 
+# Docker secrets: LOCALOPS_*_PASSWORD_FILE takes precedence over the plain variable.
+for var in LOCALOPS_OWNER_PASSWORD LOCALOPS_APP_PASSWORD; do
+  file_var="${var}_FILE"
+  if [[ -n "${!file_var:-}" ]]; then
+    export "$var"="$(cat "${!file_var}")"
+  fi
+done
+
 : "${LOCALOPS_OWNER_PASSWORD:?LOCALOPS_OWNER_PASSWORD is required}"
 : "${LOCALOPS_APP_PASSWORD:?LOCALOPS_APP_PASSWORD is required}"
 OWNER_USER="${DB_OWNER_USER:-localops_owner}"

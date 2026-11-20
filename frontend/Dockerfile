@@ -13,7 +13,14 @@ COPY . .
 RUN npm run build
 
 FROM ${NGINX_IMAGE} AS runtime
+ARG LOCALOPS_VERSION=dev
+ARG GIT_REVISION=unknown
+ARG BUILD_DATE=unknown
 LABEL org.opencontainers.image.title="localops-frontend" \
+      org.opencontainers.image.description="LocalOps web interface" \
+      org.opencontainers.image.version="${LOCALOPS_VERSION}" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html

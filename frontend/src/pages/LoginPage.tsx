@@ -45,7 +45,7 @@ export function LoginPage() {
     <div className="bg-grid grid min-h-full lg:grid-cols-[1.1fr_1fr]">
       <section className="relative hidden flex-col justify-between overflow-hidden border-r border-border p-12 lg:flex">
         <div className="flex items-center gap-3">
-          <img src="/favicon.svg" alt="" className="size-10" />
+          <img src="/logo-mark.png" alt="" className="size-10" />
           <span className="text-xl font-semibold tracking-tight">LocalOps</span>
         </div>
         <div className="max-w-lg space-y-6">

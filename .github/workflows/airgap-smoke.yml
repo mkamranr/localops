@@ -1,0 +1,123 @@
+name: Air-gap smoke test
+
+# End to end: build the offline bundle, wipe every image, install from the bundle with
+# no internet route for the application, run the security checks, exercise the API
+# against a stub local model, then back up, wipe, reinstall and restore.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  airgap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      PREFIX: ${{ github.workspace }}/../localops-install
+      PASSFILE: ${{ github.workspace }}/../keys-passphrase.txt
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build the offline bundle
+        run: |
+          version="smoke-${GITHUB_SHA::8}"
+          [[ "$GITHUB_REF" == refs/tags/v* ]] && version="${GITHUB_REF_NAME#v}"
+          allow=""
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || allow="--allow-critical"
+          scripts/build-bundle.sh --version "$version" --out "$RUNNER_TEMP/dist" --scan $allow
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          ls -lh "$RUNNER_TEMP/dist"
+
+      - name: Upload the bundle manifest and SBOMs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-metadata
+          path: ${{ runner.temp }}/dist/*.sha256
+          if-no-files-found: ignore
+
+      - name: Remove every local image (nothing may come from a registry from here on)
+        run: |
+          docker system prune -af --volumes
+          docker builder prune -af
+          test -z "$(docker images -q)"
+
+      - name: Extract and verify the bundle
+        run: |
+          cd "$RUNNER_TEMP/dist"
+          sha256sum -c "localops-airgap-$VERSION-linux-amd64.tar.gz.sha256"
+          tar xzf "localops-airgap-$VERSION-linux-amd64.tar.gz"
+          echo "BUNDLE=$RUNNER_TEMP/dist/localops-airgap-$VERSION-linux-amd64" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/dist/localops-airgap-$VERSION-linux-amd64/scripts/verify-bundle.sh"
+
+      - name: Install offline (application network has no internet route)
+        run: |
+          mkdir -p "$PREFIX/smoke-stub"
+          cp .github/smoke/stub_llm.py "$PREFIX/smoke-stub/"
+          printf 'smoke-test-keys-passphrase\n' > "$PASSFILE"
+          "$BUNDLE/scripts/install.sh" --non-interactive --prefix "$PREFIX" \
+            --llm-url http://stub-llm:8000/v1 --llm-model stub-chat --llm-provider openai_compatible \
+            --embedding-model stub-embed \
+            --extra-compose "$BUNDLE/config/docker-compose.airgap-test.yml" \
+            --extra-compose .github/smoke/docker-compose.smoke.yml
+          grep -q '^BOOTSTRAP_ADMIN_PASSWORD=' "$PREFIX/.env"
+          echo "ADMIN_PASSWORD=$(grep '^BOOTSTRAP_ADMIN_PASSWORD=' "$PREFIX/.env" | cut -d= -f2-)" >> "$GITHUB_ENV"
+
+      - name: Security checks (hardening, TLS, headers, rate limit, no egress)
+        run: $PREFIX/scripts/security-check.sh --airgap
+
+      - name: Exercise the API (local models, credentials, knowledge + vectors)
+        run: bash .github/smoke/exercise.sh seed https://127.0.0.1:8443 "$ADMIN_PASSWORD"
+
+      - name: Back up (with a sealed keys file) and verify the backup
+        run: |
+          "$PREFIX/scripts/backup.sh" --keys-passphrase-file "$PASSFILE"
+          archive="$(ls -1 "$PREFIX"/backups/localops-backup-*.tar.gz | tail -n 1)"
+          keys="$(ls -1 "$PREFIX"/backups/localops-keys-*.enc | tail -n 1)"
+          "$PREFIX/scripts/backup.sh" --verify "$archive"
+          if grep -q "$ADMIN_PASSWORD" "$keys"; then echo "keys file is not encrypted"; exit 1; fi
+          mkdir -p "$RUNNER_TEMP/saved"
+          cp "$archive" "$keys" "$RUNNER_TEMP/saved/"
+
+      - name: Wipe the installation completely and reinstall (new secrets)
+        run: |
+          (cd "$PREFIX" && docker compose down -v --remove-orphans)
+          rm -rf "$PREFIX"
+          mkdir -p "$PREFIX/smoke-stub"
+          cp .github/smoke/stub_llm.py "$PREFIX/smoke-stub/"
+          "$BUNDLE/scripts/install.sh" --non-interactive --prefix "$PREFIX" --skip-verify \
+            --llm-url http://stub-llm:8000/v1 --llm-model stub-chat --llm-provider openai_compatible \
+            --embedding-model stub-embed \
+            --extra-compose "$BUNDLE/config/docker-compose.airgap-test.yml" \
+            --extra-compose .github/smoke/docker-compose.smoke.yml
+
+      - name: Restore without the keys file is detected (credentials undecryptable)
+        run: |
+          archive="$(ls -1 "$RUNNER_TEMP"/saved/localops-backup-*.tar.gz)"
+          if "$PREFIX/scripts/restore.sh" "$archive" --yes; then
+            echo "restore with the wrong encryption key should have failed the credential check"; exit 1
+          fi
+
+      - name: Restore with the keys file
+        run: |
+          archive="$(ls -1 "$RUNNER_TEMP"/saved/localops-backup-*.tar.gz)"
+          keys="$(ls -1 "$RUNNER_TEMP"/saved/localops-keys-*.enc)"
+          "$PREFIX/scripts/restore.sh" "$archive" --keys "$keys" --keys-passphrase-file "$PASSFILE" --yes
+
+      - name: Data is back (original admin password, credentials, knowledge, vectors)
+        run: bash .github/smoke/exercise.sh verify https://127.0.0.1:8443 "$ADMIN_PASSWORD"
+
+      - name: Security checks after restore
+        run: $PREFIX/scripts/security-check.sh --airgap
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          cd "$PREFIX" 2>/dev/null || exit 0
+          docker compose ps -a
+          docker compose logs --no-color --tail 200

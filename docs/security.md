@@ -1,4 +1,4 @@
-# Security Model (Phase 6)
+# Security Model
 
 ## Authentication
 
@@ -288,5 +288,40 @@ was set, replaced or cleared.
 - Response headers: CSP (`default-src 'self'`), `X-Frame-Options: DENY`, `nosniff`,
   `Referrer-Policy: no-referrer`.
 - No CDN, web fonts or telemetry. The frontend bundle is fully self-contained.
-- Terminate TLS in front of nginx (or extend `deployment/nginx/nginx.conf`) and keep
-  `COOKIE_SECURE=true`.
+- HTTPS at nginx with `docker-compose.tls.yml`: TLS 1.2/1.3, modern ciphers, session tickets off,
+  HSTS, HTTP redirected to HTTPS, `COOKIE_SECURE=true`. The offline installer enables it by default
+  with a self-signed certificate (replace it with one from your CA).
+- nginx rate-limits `POST /api/v1/auth/login` per client IP (10/min, burst 10), in addition to the
+  API's per-account login limiter.
+
+## Deployment hardening (Phase 7)
+
+- Every container: `no-new-privileges`, `cap_drop: ALL`, rotated JSON logs, memory limits.
+  PostgreSQL and Redis get back only the capabilities their entrypoints need to fix volume
+  ownership before dropping to their service users.
+- api, worker, migrate, frontend and nginx run with a **read-only root filesystem** (tmpfs `/tmp`).
+- Application containers run as non-root users (backend uid 10001, nginx uid 101).
+- Production refuses to start without a valid `LOCALOPS_ENCRYPTION_KEY` or with placeholder
+  secrets.
+- Secrets can be supplied as files (`<NAME>_FILE`, Docker secrets via `docker-compose.secrets.yml`)
+  instead of environment variables.
+- `scripts/security-check.sh` verifies all of the above on a running installation, plus exposed
+  ports, TLS, headers, that `/metrics` and the API docs are unreachable, login rate limiting, and
+  (with `--airgap`) that the application has no route to the internet.
+
+## Supply chain
+
+- Third-party images are pinned by version in `docker-compose.yml`; the offline bundle records
+  every image ID, and `install.sh` refuses images that don't match the manifest.
+- Python and Node dependencies are installed from lockfiles at image build time; nothing is
+  downloaded when containers start.
+- Every bundle carries an SBOM per image (SPDX and CycloneDX, generated with Syft), an optional
+  Trivy vulnerability report (`--scan`; CRITICAL fixable findings fail the build), and SHA-256
+  checksums for every file.
+- CI audits Python (`pip-audit`) and Node (`npm audit`) dependencies on every push.
+
+## Backups
+
+Backups and the encryption keys are written to separate files; the keys file is sealed with a
+passphrase (scrypt, AES-256-GCM, authenticated header). Restores verify that every stored
+credential still decrypts. See [backup.md](backup.md).

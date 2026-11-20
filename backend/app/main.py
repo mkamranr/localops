@@ -11,6 +11,7 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis.asyncio import ConnectionPool, Redis
 
+from app import __version__
 from app.api.v1 import (
     ai,
     approvals,
@@ -54,7 +55,13 @@ def create_app(
         app.state.dispatcher = dispatcher or ArqDispatcher(
             ArqRedis(connection_pool=ConnectionPool.from_url(settings.redis_url))
         )
-        log.info("startup", env=settings.app_env)
+        log.info("startup", env=settings.app_env, version=__version__)
+        if settings.is_production and not settings.cookie_secure:
+            log.warning(
+                "insecure_cookies",
+                detail="COOKIE_SECURE=false: session cookies travel over plain HTTP. "
+                "Enable TLS (docker-compose.tls.yml) and set COOKIE_SECURE=true.",
+            )
         try:
             yield
         finally:
@@ -68,7 +75,7 @@ def create_app(
     docs = not settings.is_production
     app = FastAPI(
         title="LocalOps API",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url=f"{API_PREFIX}/docs" if docs else None,
         redoc_url=None,

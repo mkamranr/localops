@@ -1,0 +1,23 @@
+# HTTPS at the nginx edge. Use together with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+# (the offline installer sets this up through COMPOSE_FILE in .env).
+# Certificate: deployment/tls/server.crt + server.key. Generate a self-signed one with
+#   docker compose run --rm --no-deps -v "$PWD/deployment/tls:/tls" --user "$(id -u):$(id -g)" \
+#     api python -m app.cli gen-cert --out-dir /tls --name <hostname> --name <ip>
+# or copy in a certificate from your own CA.
+# LOCALOPS_HTTP_PORT (default 8300) then only redirects to LOCALOPS_HTTPS_PORT (8443).
+
+x-secure-cookies: &secure-cookies
+  COOKIE_SECURE: "true"
+
+services:
+  api:
+    environment: *secure-cookies
+  worker:
+    environment: *secure-cookies
+  nginx:
+    volumes:
+      - ./deployment/nginx/nginx-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deployment/tls:/etc/nginx/tls:ro
+    ports:
+      - "${LOCALOPS_HTTPS_PORT:-8443}:8443"

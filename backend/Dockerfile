@@ -28,10 +28,17 @@ CMD ["pytest", "-q"]
 
 # ---------------------------------------------------------------- runtime
 FROM ${PYTHON_IMAGE} AS runtime
+ARG LOCALOPS_VERSION=dev
+ARG GIT_REVISION=unknown
+ARG BUILD_DATE=unknown
 LABEL org.opencontainers.image.title="localops-backend" \
+      org.opencontainers.image.description="LocalOps API, worker and migrations" \
+      org.opencontainers.image.version="${LOCALOPS_VERSION}" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.licenses="Apache-2.0"
 ENV PATH="/opt/venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    APP_ENV=production
+    APP_ENV=production LOCALOPS_VERSION=${LOCALOPS_VERSION}
 RUN groupadd --system --gid 10001 localops \
  && useradd --system --uid 10001 --gid localops --home /app --shell /usr/sbin/nologin localops
 WORKDIR /app
