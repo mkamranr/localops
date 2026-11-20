@@ -66,7 +66,9 @@ jobs:
             --extra-compose "$BUNDLE/config/docker-compose.airgap-test.yml" \
             --extra-compose .github/smoke/docker-compose.smoke.yml
           grep -q '^BOOTSTRAP_ADMIN_PASSWORD=' "$PREFIX/.env"
-          echo "ADMIN_PASSWORD=$(grep '^BOOTSTRAP_ADMIN_PASSWORD=' "$PREFIX/.env" | cut -d= -f2-)" >> "$GITHUB_ENV"
+          admin="$(grep '^BOOTSTRAP_ADMIN_PASSWORD=' "$PREFIX/.env" | cut -d= -f2-)"
+          echo "::add-mask::$admin"
+          echo "ADMIN_PASSWORD=$admin" >> "$GITHUB_ENV"
 
       - name: Security checks (hardening, TLS, headers, rate limit, no egress)
         run: $PREFIX/scripts/security-check.sh --airgap

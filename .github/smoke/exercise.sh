@@ -11,9 +11,23 @@ step() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 login() {
-  "${CURL[@]}" -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg p "$PASSWORD" '{tenant: "system", username: "admin", password: $p}')" \
-    "$BASE/api/v1/auth/login" | jq -r .access_token
+  # The security check deliberately trips the login rate limit; wait out its window.
+  local out code
+  for _ in $(seq 1 30); do
+    out="$(mktemp)"
+    code="$(curl -sSk --max-time 30 -o "$out" -w '%{http_code}' -H 'Content-Type: application/json' \
+      -d "$(jq -n --arg p "$PASSWORD" '{tenant: "system", username: "admin", password: $p}')" \
+      "$BASE/api/v1/auth/login")"
+    if [[ "$code" == 200 ]]; then
+      jq -r .access_token "$out"
+      rm -f "$out"
+      return 0
+    fi
+    [[ "$code" == 429 ]] || fail "login returned HTTP $code: $(cat "$out")"
+    rm -f "$out"
+    sleep 10
+  done
+  fail "login still rate limited after 5 minutes"
 }
 
 step "Login"
