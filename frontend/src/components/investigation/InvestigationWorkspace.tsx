@@ -17,6 +17,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { errorMessage } from "@/api/client";
 import { incidentsApi, investigationsApi } from "@/api/endpoints";
 import { severityFromUrgency } from "@/components/incidents/shared";
+import { AgentFlow } from "@/components/investigation/AgentFlow";
+import { buildFlow } from "@/components/investigation/flow";
 import { RcaReport } from "@/components/investigation/RcaReport";
 import {
   ACTIVE,
@@ -278,7 +280,7 @@ function Timeline({ events: all, state }: { events: InvestigationEvent[]; state:
     end.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [events.length]);
   return (
-    <Panel title="Agent timeline" actions={<StreamIndicator state={state} />} bodyClassName="max-h-[520px] overflow-y-auto">
+    <Panel title="Activity log" actions={<StreamIndicator state={state} />} bodyClassName="max-h-[520px] overflow-y-auto">
       {!events.length ? (
         <Spinner label="Waiting for events…" />
       ) : (
@@ -439,6 +441,10 @@ export function InvestigationWorkspace({ id, compact = false }: { id: string; co
     () => liveRemediation(query.data?.status === "completed" ? query.data.result.remediation : null, events),
     [query.data, events],
   );
+  const flow = useMemo(
+    () => buildFlow(events, query.data?.status ?? "queued", tasks, remediation),
+    [events, query.data?.status, tasks, remediation],
+  );
   const cancel = useMutation({
     mutationFn: () => investigationsApi.cancel(id),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["investigation", id] }),
@@ -487,6 +493,8 @@ export function InvestigationWorkspace({ id, compact = false }: { id: string; co
       {inv.status === "failed" && inv.error && <Alert>{inv.error}</Alert>}
       {inv.status === "awaiting_input" && canInvestigate && <ClarificationBox inv={inv} />}
       {inv.status === "awaiting_approval" && <AwaitingApprovalBanner data={remediation} description={inv.pending_question} />}
+
+      <AgentFlow flow={flow} actions={<StreamIndicator state={state} />} />
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)]">
         <ReasoningPanel classification={classification} waiting={active} resources={inv.result?.resources ?? []} />
