@@ -113,7 +113,10 @@ info "Generating SBOMs (SPDX + CycloneDX) with $SYFT_IMAGE"
 sock_gid="$(stat -c %g /var/run/docker.sock)"
 for image in "${APP_IMAGES[@]}" "${THIRD_PARTY[@]}"; do
   base="$(printf '%s' "$image" | tr '/:' '__')"
-  docker run --rm --user "$(id -u):$sock_gid" -e HOME=/tmp -e SYFT_CHECK_FOR_APP_UPDATE=false \
+  # Syft's image has no /tmp writable by an unprivileged user: lend it a host directory.
+  mkdir -p "$OUT/.syft-tmp"
+  docker run --rm --user "$(id -u):$sock_gid" -e HOME=/tmp -e TMPDIR=/tmp \
+    -e SYFT_CHECK_FOR_APP_UPDATE=false -v "$OUT/.syft-tmp:/tmp" \
     -v /var/run/docker.sock:/var/run/docker.sock:ro \
     -v "$STAGE/SBOM:/out" "$SYFT_IMAGE" "docker:$image" \
     -o "spdx-json=/out/$base.spdx.json" -o "cyclonedx-json=/out/$base.cdx.json"
