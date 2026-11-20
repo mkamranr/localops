@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Text, cast, func, or_, select, text
+from sqlalchemy import Text, and_, cast, exists, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +60,73 @@ def _like(value: str) -> str:
     return f"%{escaped}%"
 
 
+# Resources listed under the host they run on (via a RUNS_ON relationship).
+CHILD_TYPES = ("docker_container",)
+
+
+def _runs_on_host(child: Any) -> Any:
+    """Condition: ``child`` is a nested type with a RUNS_ON edge to some resource."""
+    return and_(
+        child.resource_type.in_(CHILD_TYPES),
+        exists().where(
+            ResourceRelationship.source_id == child.id,
+            ResourceRelationship.relationship_type == "RUNS_ON",
+        ),
+    )
+
+
+async def hierarchy(
+    session: AsyncSession, ids: list[uuid.UUID]
+) -> tuple[dict[uuid.UUID, tuple[uuid.UUID, str]], dict[uuid.UUID, dict[str, int]]]:
+    """For the given resources: their host (id, name) if nested, and their nested
+    children counted by health status."""
+    if not ids:
+        return {}, {}
+    child = Resource.__table__.alias("child")
+    host = Resource.__table__.alias("host")
+    parents: dict[uuid.UUID, tuple[uuid.UUID, str]] = {}
+    rows = await session.execute(
+        select(ResourceRelationship.source_id, host.c.id, host.c.name)
+        .join(child, child.c.id == ResourceRelationship.source_id)
+        .join(host, host.c.id == ResourceRelationship.target_id)
+        .where(
+            ResourceRelationship.relationship_type == "RUNS_ON",
+            ResourceRelationship.source_id.in_(ids),
+            child.c.resource_type.in_(CHILD_TYPES),
+        )
+        .order_by(host.c.name)
+    )
+    for source_id, host_id, host_name in rows:
+        parents.setdefault(source_id, (host_id, host_name))
+    children: dict[uuid.UUID, dict[str, int]] = {}
+    rows = await session.execute(
+        select(ResourceRelationship.target_id, child.c.health_status, func.count())
+        .join(child, child.c.id == ResourceRelationship.source_id)
+        .where(
+            ResourceRelationship.relationship_type == "RUNS_ON",
+            ResourceRelationship.target_id.in_(ids),
+            child.c.resource_type.in_(CHILD_TYPES),
+        )
+        .group_by(ResourceRelationship.target_id, child.c.health_status)
+    )
+    for target_id, health, count in rows:
+        children.setdefault(target_id, {})[health] = int(count)
+    return parents, children
+
+
+def with_hierarchy(
+    out: Any,
+    parents: dict[uuid.UUID, tuple[uuid.UUID, str]],
+    children: dict[uuid.UUID, dict[str, int]],
+) -> Any:
+    if out.id in parents:
+        out.parent_id, out.parent_name = parents[out.id]
+    health = children.get(out.id) or {}
+    out.child_health = health
+    out.child_count = sum(health.values())
+    return out
+
+
 async def list_resources(
     session: AsyncSession,
     page: PageParams,
@@ -72,8 +139,22 @@ async def list_resources(
     tag: str | None = None,
     integration_id: uuid.UUID | None = None,
     stale: bool | None = None,
+    top_level: bool = False,
+    parent_id: uuid.UUID | None = None,
 ) -> tuple[list[Resource], int]:
     stmt = select(Resource)
+    if top_level:
+        stmt = stmt.where(~_runs_on_host(Resource))
+    if parent_id is not None:
+        stmt = stmt.where(
+            Resource.resource_type.in_(CHILD_TYPES),
+            Resource.id.in_(
+                select(ResourceRelationship.source_id).where(
+                    ResourceRelationship.target_id == parent_id,
+                    ResourceRelationship.relationship_type == "RUNS_ON",
+                )
+            ),
+        )
     if q:
         pattern = _like(q.strip())
         stmt = stmt.where(
@@ -138,6 +219,7 @@ async def get_resource(session: AsyncSession, resource_id: uuid.UUID) -> Resourc
 
 async def resource_out(session: AsyncSession, resource: Resource) -> ResourceOut:
     out = ResourceOut.model_validate(resource)
+    with_hierarchy(out, *await hierarchy(session, [resource.id]))
     if resource.integration_id:
         out.integration_name = await session.scalar(
             select(Integration.name).where(Integration.id == resource.integration_id)

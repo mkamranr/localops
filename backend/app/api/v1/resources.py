@@ -50,6 +50,10 @@ async def list_resources(
     tag: str | None = Query(None, max_length=50),
     integration_id: uuid.UUID | None = None,
     stale: bool | None = None,
+    top_level: bool = Query(
+        False, description="Hide resources that run on another one (containers on a host)"
+    ),
+    parent_id: uuid.UUID | None = Query(None, description="Only the containers of this host"),
     ctx: RequestContext = Depends(require_permission("resource.read")),
 ) -> Page[ResourceSummaryOut]:
     rows, total = await svc.list_resources(
@@ -63,9 +67,15 @@ async def list_resources(
         tag=tag,
         integration_id=integration_id,
         stale=stale,
+        top_level=top_level,
+        parent_id=parent_id,
     )
+    parents, children = await svc.hierarchy(ctx.session, [r.id for r in rows])
     return Page(
-        items=[ResourceSummaryOut.model_validate(r) for r in rows],
+        items=[
+            svc.with_hierarchy(ResourceSummaryOut.model_validate(r), parents, children)
+            for r in rows
+        ],
         total=total,
         page=page.page,
         page_size=page.page_size,

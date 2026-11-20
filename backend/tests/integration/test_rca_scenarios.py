@@ -594,3 +594,31 @@ async def test_tool_run_on_demand(
     assert bad.json()["status"] == "rejected"
     history = (await s.get(f"/api/v1/resources/{res['migrate']['id']}/tool-executions")).json()
     assert history[0]["tool"] == "docker_container_logs" and history[0]["actor"] == "tadmin"
+
+
+async def test_inventory_groups_containers_under_their_host(
+    app: FastAPI, make_tenant: Any, diag_host: tuple[DiagHost, int]
+) -> None:
+    _host, port = diag_host
+    t, res, _ = await _discovered_tenant(app, make_tenant, port)
+    s = t.admin
+    host, container = res["app-01"], res["migrate"]
+    assert container["resource_type"] == "docker_container"
+    # flat list: the container names its host; the host counts its containers by health
+    assert container["parent_id"] == host["id"] and container["parent_name"] == "app-01"
+    assert host["child_count"] >= 1 and host["child_health"].get("unhealthy", 0) >= 1
+
+    top = (await s.get("/api/v1/resources", params={"top_level": True})).json()
+    names = {r["name"] for r in top["items"]}
+    assert "app-01" in names and "migrate" not in names
+    assert top["total"] == len(top["items"])
+
+    kids = (await s.get("/api/v1/resources", params={"parent_id": host["id"]})).json()
+    assert {r["name"] for r in kids["items"]} >= {"migrate"}
+    assert all(r["resource_type"] == "docker_container" for r in kids["items"])
+    assert kids["total"] == host["child_count"]
+
+    detail = (await s.get(f"/api/v1/resources/{container['id']}")).json()
+    assert detail["parent_name"] == "app-01"
+    detail = (await s.get(f"/api/v1/resources/{host['id']}")).json()
+    assert detail["child_count"] == host["child_count"]

@@ -356,6 +356,11 @@ class ResourceSummaryOut(ApiModel):
     integration_id: uuid.UUID | None
     last_seen_at: datetime | None
     created_at: datetime
+    # Hierarchy: a container's host, and a host's containers (from RUNS_ON relationships).
+    parent_id: uuid.UUID | None = None
+    parent_name: str | None = None
+    child_count: int = 0
+    child_health: dict[str, int] = Field(default_factory=dict)
 
 
 class ResourceOut(ResourceSummaryOut):

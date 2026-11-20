@@ -285,6 +285,10 @@ export interface ResourceQuery {
   tag?: string;
   integration_id?: string;
   stale?: boolean;
+  /** Hide containers that run on a host (the grouped view). */
+  top_level?: boolean;
+  /** Only the containers of this host. */
+  parent_id?: string;
 }
 
 export const resourcesApi = {

@@ -6,6 +6,7 @@ import { errorMessage } from "@/api/client";
 import { resourcesApi } from "@/api/endpoints";
 import { DependencyGraphView } from "@/components/inventory/DependencyGraphView";
 import { ResourceIncidents, ResourceLogs } from "@/components/inventory/ResourceDiagnostics";
+import { childSummary } from "@/components/inventory/hierarchy";
 import { ResourceDialog } from "@/components/inventory/ResourceDialog";
 import { ResourceRemediation } from "@/components/remediation/History";
 import { HealthBadge, percentTone, RELATIONSHIP_META, Sparkline, TYPE_META, TypeIcon } from "@/components/inventory/shared";
@@ -18,7 +19,7 @@ import { formatDateTime, formatRelative } from "@/utils/format";
 
 type Facts = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-const TABS = ["overview", "metrics", "services", "dependencies", "history", "logs", "incidents", "remediation"] as const;
+const TABS = ["overview", "containers", "metrics", "services", "dependencies", "history", "logs", "incidents", "remediation"] as const;
 type Tab = (typeof TABS)[number];
 
 function formatUptime(seconds: number | null | undefined) {
@@ -442,6 +443,41 @@ function History({ id }: { id: string }) {
 
 // ------------------------------------------------------------------ page
 
+function HostContainers({ host }: { host: Resource }) {
+  const navigate = useNavigate();
+  const [page, setPage] = useState(1);
+  const list = useQuery({
+    queryKey: ["resources", "children", host.id, "detail", page],
+    queryFn: () => resourcesApi.list({ page, page_size: 50, parent_id: host.id }),
+    placeholderData: (prev) => prev,
+  });
+  if (list.isLoading) return <Spinner />;
+  if (list.error || !list.data) return <ErrorState message={errorMessage(list.error)} onRetry={() => list.refetch()} />;
+  if (!list.data.items.length) return <EmptyState title="No containers" description="No containers were discovered on this host." />;
+  return (
+    <div className="panel">
+      <Table>
+        <thead>
+          <tr><Th>Container</Th><Th>Health</Th><Th>Last seen</Th></tr>
+        </thead>
+        <tbody>
+          {list.data.items.map((c) => (
+            <tr key={c.id} className={`cursor-pointer hover:bg-surface-2/60 ${c.stale ? "opacity-60" : ""}`} onClick={() => navigate(`/infrastructure/${c.id}`)}>
+              <Td>
+                <Link to={`/infrastructure/${c.id}`} className="font-medium hover:underline" onClick={(e) => e.stopPropagation()}>{c.name}</Link>
+                {c.health_reasons.length > 0 && <div className="mt-0.5 max-w-md truncate text-xs text-muted" title={c.health_reasons.join("; ")}>{c.health_reasons[0]}</div>}
+              </Td>
+              <Td><HealthBadge status={c.health_status} stale={c.stale} /></Td>
+              <Td className="whitespace-nowrap text-xs text-muted">{formatRelative(c.last_seen_at)}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+      <Pagination page={page} pageSize={50} total={list.data.total} onPage={setPage} />
+    </div>
+  );
+}
+
 export function ResourceDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -484,6 +520,13 @@ export function ResourceDetailPage() {
             </div>
             <p className="mt-0.5 text-sm text-muted">
               {TYPE_META[r.resource_type]?.label} {r.os && `· ${r.os}`} {r.ip_addresses[0] && <span className="font-mono text-xs">· {r.ip_addresses[0]}</span>}
+              {r.parent_id && (
+                <>
+                  {" · runs on "}
+                  <Link to={`/infrastructure/${r.parent_id}`} className="text-fg hover:underline">{r.parent_name}</Link>
+                </>
+              )}
+              {r.child_count > 0 && ` · ${childSummary(r.child_health)}`}
             </p>
           </div>
         </div>
@@ -503,7 +546,7 @@ export function ResourceDetailPage() {
       {(check.error || remove.error) && <Alert>{errorMessage(check.error ?? remove.error)}</Alert>}
 
       <div className="flex gap-1 overflow-x-auto border-b border-border text-sm">
-        {TABS.map((t) => (
+        {TABS.filter((t) => t !== "containers" || r.child_count > 0).map((t) => (
           <button
             key={t}
             type="button"
@@ -516,6 +559,7 @@ export function ResourceDetailPage() {
       </div>
 
       {tab === "overview" && <Overview resource={r} />}
+      {tab === "containers" && <HostContainers host={r} />}
       {tab === "metrics" && <Metrics id={r.id} />}
       {tab === "services" && <Services resource={r} />}
       {tab === "dependencies" && <Dependencies resource={r} />}

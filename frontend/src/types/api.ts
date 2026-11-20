@@ -516,6 +516,12 @@ export interface ResourceSummary {
   integration_id: string | null;
   last_seen_at: string | null;
   created_at: string;
+  /** The host a container runs on (RUNS_ON relationship). */
+  parent_id: string | null;
+  parent_name: string | null;
+  /** Containers running on this host, counted by health. */
+  child_count: number;
+  child_health: Partial<Record<HealthStatus, number>>;
 }
 
 export interface Resource extends ResourceSummary {
