@@ -23,6 +23,9 @@ while [[ $# -gt 0 ]]; do
 done
 require_cmd docker curl
 
+# A broken probe must show up as a FAIL line, never abort the run: no errexit/pipefail here.
+set +e +o pipefail
+
 failures=0
 pass() { ok "$*"; }
 fail() { printf '  %sFAIL%s %s\n' "$C_RED" "$C_OFF" "$*"; failures=$((failures + 1)); }
@@ -50,8 +53,15 @@ for svc in api worker frontend nginx; do
 done
 for svc in postgres redis; do
   # The entrypoint starts as root only to fix volume ownership, then drops privileges.
-  user="$(dc top "$svc" 2>/dev/null | awk 'NR > 1 && /postgres:|redis-server/ {print $1; exit}')"
-  [[ -n "$user" && "$user" != root ]] && pass "$svc: server process runs as $user" || fail "$svc: server process runs as ${user:-unknown}"
+  # PID 1 is the server itself (the entrypoint execs it); read its real UID.
+  uid="$(dc exec -T "$svc" cat /proc/1/status 2>/dev/null | awk '/^Uid:/ {print $2}' | tr -d '\r')"
+  if [[ -z "$uid" ]]; then
+    fail "$svc: could not read the server process user"
+  elif [[ "$uid" != 0 ]]; then
+    pass "$svc: server process runs as uid $uid"
+  else
+    fail "$svc: server process runs as root"
+  fi
 done
 
 info "Exposed ports"
