@@ -85,6 +85,19 @@ and session cookies are marked `Secure`. To make this permanent, set
 `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml` in `.env`. Without TLS, production
 logs a warning at startup when `COOKIE_SECURE=false`.
 
+### Forgotten administrator password
+
+`BOOTSTRAP_ADMIN_PASSWORD` is used only to create the first administrator; changing it later
+does not reset an existing account. To recover access, run on the host:
+
+```bash
+docker compose exec api python -m app.cli reset-password --tenant system --username admin
+```
+
+You are asked for the new password twice (with `-T` / no terminal, a temporary password is
+generated and printed). The user must change it at the next sign-in, existing sessions are
+revoked, and the reset is recorded in the audit log.
+
 ## 3. Verify
 
 ```bash

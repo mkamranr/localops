@@ -10,6 +10,7 @@ Usage::
     python -m app.cli qdrant-restore --in /backup/qdrant
     python -m app.cli check-secrets    # stored credentials decrypt with the configured key
     python -m app.cli export-tenant <slug> [--out file.json]
+    python -m app.cli reset-password [--tenant system] [--username admin]
 
 gen-cert, seal-keys and unseal-keys need no configuration (they run with --network none
 during installation and backup); the others read the normal LocalOps settings.
@@ -21,6 +22,7 @@ import argparse
 import asyncio
 import json
 import os
+import secrets
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -152,6 +154,36 @@ def _export_tenant(slug: str, out: str | None) -> int:
     return 0
 
 
+def _reset_password(tenant: str, username: str) -> int:
+    """New password from the terminal (asked twice) or, without a TTY, generated and printed."""
+    import getpass
+
+    from app.ops.data import reset_password
+
+    if sys.stdin.isatty():
+        password = getpass.getpass(f"New password for {username} in tenant {tenant}: ")
+        if password != getpass.getpass("Repeat it: "):
+            return _err("passwords do not match")
+        generated = False
+    else:
+        password = secrets.token_urlsafe(18)
+        generated = True
+    if len(password) < PASSWORD_MIN_LENGTH:
+        return _err(f"the password must be at least {PASSWORD_MIN_LENGTH} characters")
+    try:
+        status = asyncio.run(_with_db(lambda: reset_password(tenant, username, password)))
+    except LookupError as exc:
+        return _err(str(exc))
+    print(f"Password reset for {username} in tenant {tenant}; it must be changed at next sign-in.")
+    if generated:
+        print(f"Temporary password: {password}")
+    if status != "active":
+        print(
+            f"warning: the account is {status}; an administrator must re-enable it", file=sys.stderr
+        )
+    return 0
+
+
 def _qdrant(command: str, directory: str) -> int:
     from app.ops import qdrant_backup
 
@@ -188,6 +220,9 @@ def _parser() -> argparse.ArgumentParser:
     exp = sub.add_parser("export-tenant", help="Export one tenant's data as JSON")
     exp.add_argument("slug")
     exp.add_argument("--out")
+    reset = sub.add_parser("reset-password", help="Reset a user's password (account recovery)")
+    reset.add_argument("--tenant", default="system")
+    reset.add_argument("--username", default="admin")
     return parser
 
 
@@ -205,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         return _check_secrets()
     if args.command == "export-tenant":
         return _export_tenant(args.slug, args.out)
+    if args.command == "reset-password":
+        return _reset_password(args.tenant, args.username)
     if args.command == "qdrant-snapshot":
         return _qdrant(args.command, args.out)
     if args.command == "qdrant-restore":

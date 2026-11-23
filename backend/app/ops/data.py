@@ -7,14 +7,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app import __version__
 from app.core.config import Settings
 from app.core.crypto import EncryptionUnavailableError, decrypt_secret
+from app.core.security import hash_password
 from app.database.base import Base
-from app.database.session import tenant_session
-from app.models import Integration, ModelEndpoint, Tenant
+from app.database.session import set_tenant_context, tenant_session
+from app.models import Integration, ModelEndpoint, RefreshToken, Tenant
+from app.repositories import identity as identity_repo
+from app.services import audit_service
 
 # Never exported: session tokens, and bulky data that is derived or regenerated.
 EXPORT_SKIP_TABLES = {"refresh_tokens", "knowledge_chunks", "resource_metric_samples"}
@@ -121,3 +124,42 @@ async def export_tenant(slug: str) -> dict[str, Any]:
         "tenant": _jsonable(dict(tenant)),
         "tables": tables,
     }
+
+
+async def reset_password(tenant_slug: str, username: str, new_password: str) -> str:
+    """Operator recovery: set a user's password from the host (``cli reset-password``).
+
+    The user must change it at the next sign-in; existing sessions are revoked and the
+    reset is audited. Returns the user's status (a disabled user stays disabled).
+    """
+    async with tenant_session(None) as session:
+        resolved = await identity_repo.resolve_tenant_slug(session, tenant_slug.strip().lower())
+        if resolved is None:
+            raise LookupError(f"tenant {tenant_slug!r} not found")
+        tenant_id = resolved[0]
+        await set_tenant_context(session, tenant_id)
+        user = await identity_repo.get_user_by_username(
+            session, tenant_id, username.strip().lower()
+        )
+        if user is None:
+            raise LookupError(f"user {username!r} not found in tenant {tenant_slug!r}")
+        now = datetime.now(UTC)
+        user.password_hash = hash_password(new_password)
+        user.must_change_password = True
+        user.password_changed_at = now
+        await session.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        await audit_service.record(
+            session,
+            tenant_id=tenant_id,
+            action="auth.password_reset",
+            user_id=user.id,
+            username=user.username,
+            entity_type="user",
+            entity_id=user.id,
+            details={"via": "cli"},
+        )
+        return user.status

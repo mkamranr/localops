@@ -11,8 +11,8 @@ from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
 from app.core.config import get_settings
-from app.ops.data import check_secrets, export_tenant
-from tests.integration.conftest import TenantInfo
+from app.ops.data import check_secrets, export_tenant, reset_password
+from tests.integration.conftest import LoginFn, TenantInfo
 
 pytestmark = pytest.mark.usefixtures("bootstrapped")
 
@@ -70,3 +70,18 @@ async def test_tenant_export_excludes_secrets_and_other_tenants(make_tenant: Mak
 
     with pytest.raises(LookupError):
         await export_tenant("no-such-tenant")
+
+
+async def test_reset_password_recovers_access(make_tenant: MakeTenant, login: LoginFn) -> None:
+    tenant = await make_tenant()
+    status = await reset_password(tenant.slug, "TAdmin", "recovered-password-123")
+    assert status == "active"
+
+    session = await login(tenant.slug, "tadmin", "recovered-password-123")
+    me = (await session.get("/api/v1/auth/me")).json()
+    assert me["must_change_password"] is True
+
+    with pytest.raises(LookupError):
+        await reset_password(tenant.slug, "nobody", "recovered-password-123")
+    with pytest.raises(LookupError):
+        await reset_password("no-such-tenant", "tadmin", "recovered-password-123")
