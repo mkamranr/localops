@@ -84,7 +84,7 @@ if [[ "$MODE" == seed ]]; then
 
 elif [[ "$MODE" == verify ]]; then
   step "Integration and its credentials survived the restore"
-  api "$BASE/api/v1/integrations" | jq -e '(.items // .) | map(.name) | index("Smoke Linux hosts")' >/dev/null ||
+  api "$BASE/api/v1/integrations" | jq -e '(if type == "array" then . else .items end) | map(.name) | index("Smoke Linux hosts")' >/dev/null ||
     fail "integration missing after restore"
   step "Knowledge document and vectors survived the restore"
   api "$BASE/api/v1/knowledge" | jq -e '.items | map(.title) | index("Smoke runbook")' >/dev/null ||
