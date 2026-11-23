@@ -335,5 +335,6 @@ docker compose -f docker-compose.test.yml down -v
 | Stop | `docker compose down` (data volumes are kept) |
 | Prometheus metrics | `http://api:8000/metrics` on the internal network (not exposed by nginx) |
 
-Backup and restore scripts are delivered in Phase 7. Until then, back up the
-`localops_postgres-data` volume with `pg_dump` (`docker compose exec postgres pg_dump -U postgres localops`).
+Back up with `scripts/backup.sh`. It covers PostgreSQL and the Qdrant vectors, and seals the
+encryption keys in a separate passphrase-protected file. Restore with `scripts/restore.sh`. See
+[backup.md](backup.md).

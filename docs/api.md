@@ -1,4 +1,4 @@
-# REST API (Phase 6)
+# REST API
 
 Base path: `/api/v1`. Interactive OpenAPI docs are at `/api/v1/docs` when `APP_ENV` is not
 `production`.

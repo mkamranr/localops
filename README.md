@@ -69,7 +69,8 @@ Everything stays inside your network: the models, the data and the audit trail.
       A Supervisor classifies the request, plans the work and dispatches specialists:
       discovery, incident triage, infrastructure, application and network diagnostics,
       knowledge, change impact, root cause analysis, remediation planning and verification.
-      Built on LangGraph, with durable PostgreSQL checkpoints and live progress streaming.
+      Built on LangGraph, with durable PostgreSQL checkpoints. A live workflow diagram shows
+      every step as it runs: parallel agents, their tool calls, and where the work goes next.
     </td>
     <td width="50%" valign="top">
       <h4>🗺️ Infrastructure discovery</h4>
@@ -129,6 +130,21 @@ Everything stays inside your network: the models, the data and the audit trail.
       <h4>📜 Full audit trail</h4>
       Logins, configuration changes, tool runs, approvals and executions are all recorded,
       with secrets redacted and credentials encrypted at rest.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h4>🛰️ Air-gapped distribution</h4>
+      One offline bundle with every image, SBOMs (SPDX, CycloneDX), a vulnerability report and
+      checksums. The installer verifies it, generates secrets and a TLS certificate, and starts
+      the stack without downloading anything. Containers run hardened: non-root, read-only,
+      no capabilities, HTTPS only.
+    </td>
+    <td valign="top">
+      <h4>💾 Backup and restore</h4>
+      Scripted backups of PostgreSQL and the vector store, with the encryption keys sealed in
+      a separate passphrase-protected file. Restores check that every stored credential still
+      decrypts. Per-tenant JSON export for audits and offboarding.
     </td>
   </tr>
 </table>
@@ -277,10 +293,14 @@ npm run lint && npm test && npm run build
 |---|---|
 | `backend/` | FastAPI app (`app/`), Alembic migrations, tests, Dockerfile |
 | `frontend/` | React + TypeScript + Tailwind UI, Dockerfile |
-| `deployment/` | nginx reverse proxy and PostgreSQL init scripts |
+| `deployment/` | nginx configs (HTTP and TLS), PostgreSQL init scripts, model manifest and transfer guide |
+| `scripts/` | Offline bundle builder, bundle verification, installer, start/stop/status, backup, restore, security checks |
 | `docs/` | Guides, screenshots and the logo (`docs/images/`) |
 | `docker-compose.yml` | Full stack: postgres, redis, qdrant, migrate, api, worker, frontend, nginx |
+| `docker-compose.tls.yml`, `.secrets.yml`, `.bundle.yml` | Overrides: HTTPS, Docker secrets, offline bundle (never pull) |
+| `docker-compose.airgap-test.yml` | Test-only override that removes the application network's internet route |
 | `docker-compose.test.yml` | Self-contained backend test stack |
+| `.github/` | CI (lint, types, tests, image builds, dependency audit) and the end-to-end air-gap smoke test |
 
 </details>
 

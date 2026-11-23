@@ -52,7 +52,10 @@ Isolation is enforced by **PostgreSQL row-level security**, not only by applicat
 
 > **Limitation:** RLS protects against application bugs such as forgotten filters or IDOR. It
 > doesn't protect against a fully compromised application process, which could set
-> `app.tenant_id` itself. Phase 7 hardening will revisit this.
+> `app.tenant_id` itself. This is inherent to RLS with an application-set tenant context. The
+> deployment hardening below reduces how far a compromise can reach: non-root users, read-only
+> filesystems, no Linux capabilities and secrets supplied as files. It does not remove this
+> limitation.
 
 These properties are tested directly in SQL as the app role (`backend/tests/integration/test_rls.py`).
 
@@ -294,7 +297,7 @@ was set, replaced or cleared.
 - nginx rate-limits `POST /api/v1/auth/login` per client IP (10/min, burst 10), in addition to the
   API's per-account login limiter.
 
-## Deployment hardening (Phase 7)
+## Deployment hardening
 
 - Every container: `no-new-privileges`, `cap_drop: ALL`, rotated JSON logs, memory limits.
   PostgreSQL and Redis get back only the capabilities their entrypoints need to fix volume

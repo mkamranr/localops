@@ -1,4 +1,4 @@
-# AI Orchestration (Phase 6)
+# AI Orchestration
 
 - **Phase 2:** the model gateway, the agent registry, the LangGraph investigation workflow with
   persistent checkpoints, and live progress streaming.

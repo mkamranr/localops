@@ -1,4 +1,4 @@
-# Architecture (Phase 6)
+# Architecture
 
 LocalOps is a **modular monolith** (spec §25.1): one FastAPI backend image runs as `api`,
 `worker` and the one-shot `migrate`. A static React bundle is served behind an nginx reverse proxy.
@@ -24,7 +24,9 @@ flowchart LR
 ```
 backend/app/
 ├── main.py            app factory, middleware, routers, /metrics
-├── cli.py             `python -m app.cli bootstrap`
+├── cli.py             operator CLI: bootstrap, gen-cert, seal/unseal-keys, qdrant snapshot/restore,
+│                      check-secrets, export-tenant, reset-password
+├── ops/               key sealing, TLS certificates, Qdrant backup, tenant export, account recovery
 ├── worker.py          arq worker: investigation + discovery jobs, discovery scheduler cron,
 │                      startup recovery, heartbeat
 ├── core/              config, security (argon2/JWT/refresh), permissions catalogue,
@@ -158,7 +160,7 @@ system fonts only and runs fully offline.
   The heavier pages are loaded on demand. Phase 6 adds the Knowledge Base, Settings → Tools,
   a Tools tab on MCP and HTTP API integrations, and agent configuration with custom agents.
 
-## Knowledge and extensibility (Phase 6)
+## Knowledge and extensibility
 
 See [knowledge.md](knowledge.md). Revision `0006` adds:
 
@@ -192,8 +194,34 @@ Background jobs in the worker:
 - `knowledge_sync` (every 5 minutes: generated documents and retries);
 - `mcp_tool_sync` (hourly).
 
-## Planned next (Phase 7)
+## Deployment and distribution
 
-- offline packaging, backup and restore;
+- **Images.** One backend image runs `migrate`, `api` and `worker`; the frontend image is a
+  static bundle on unprivileged nginx. Both carry OCI labels (version, git revision, build date).
+  Third-party images are pinned in `docker-compose.yml`.
+- **Hardening.** Every container has `no-new-privileges` and drops all Linux capabilities
+  (PostgreSQL and Redis get back only what their entrypoints need), plus log rotation and
+  memory limits. The application containers have read-only root filesystems and run as non-root
+  users.
+- **Edge.** nginx is the only published service. `docker-compose.tls.yml` switches it to HTTPS
+  (TLS 1.2/1.3, HSTS, HTTP redirect) and rate-limits logins.
+- **Secrets.** Secrets come from `.env` or from files (`<NAME>_FILE`, Docker secrets via
+  `docker-compose.secrets.yml`). Production refuses placeholder secrets and requires a valid
+  `LOCALOPS_ENCRYPTION_KEY`.
+- **Offline bundle.** `scripts/build-bundle.sh` packages every image, SBOMs, an optional Trivy
+  report, the configuration and checksums. `scripts/install.sh` verifies the bundle, loads the
+  images (checking each image ID against the manifest), generates secrets and a certificate, and
+  starts the stack with `pull_policy: never`. See [airgap-installation.md](airgap-installation.md).
+- **Backups.** `scripts/backup.sh` writes the PostgreSQL dump, per-collection Qdrant snapshots
+  and the configuration; the keys go into a separate passphrase-sealed file.
+  `scripts/restore.sh` restores both and verifies that stored credentials still decrypt. See
+  [backup.md](backup.md).
+- **Verification.** CI runs lint, types, tests, image builds and dependency audits. The air-gap
+  smoke workflow builds the bundle, wipes every image, installs offline with no internet route,
+  runs `scripts/security-check.sh`, then does a backup, wipe, reinstall and restore.
+
+## Possible next steps
+
 - notifications (email and chat) for approvals and incidents;
-- further integrations (SNMP, Kubernetes, VMware, Proxmox, monitoring systems).
+- further integrations (SNMP, Kubernetes, VMware, Proxmox, monitoring systems);
+- image signing (cosign) for the offline bundle.

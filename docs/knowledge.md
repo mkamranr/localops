@@ -1,4 +1,4 @@
-# Knowledge and Extensibility (Phase 6)
+# Knowledge and Extensibility
 
 Phase 6 adds:
 
